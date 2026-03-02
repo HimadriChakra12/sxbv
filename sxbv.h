@@ -12,6 +12,11 @@
 typedef enum { FIT_NONE, FIT_WIDTH, FIT_HEIGHT, FIT_PAGE } FitMode;
 
 typedef enum {
+    CMD_TOGGLE_BAR,
+    CMD_TOGGLE_FILENAME,
+    CMD_TOGGLE_ZOOM,
+    CMD_TOGGLE_FITMODE,
+    CMD_TOGGLE_ROTATION_IND,
     CMD_NONE,
     CMD_SCROLL_DOWN, CMD_SCROLL_UP,
     CMD_SCROLL_LEFT, CMD_SCROLL_RIGHT,
@@ -92,6 +97,14 @@ typedef struct {
     int          num_valid;
 
     const char  *filename;
+
+    int          bar_visible;
+    int          show_filename;
+    int          show_pagelabel;
+    int          show_zoom;
+    int          show_fitmode;
+    int          show_rotation;
+    int          show_fullscreen_indicator;
 } Viewer;
 
 /* image.c */

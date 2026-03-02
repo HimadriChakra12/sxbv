@@ -92,6 +92,21 @@ static void run_command(Viewer *v, Command cmd, int cnt)
     int sp = (int)(v->win_h * SCROLL_PAGE_FRAC);
 
     switch (cmd) {
+        case CMD_TOGGLE_BAR:
+            v->bar_visible = !v->bar_visible;
+            render_page(v); win_draw(v); break;
+        case CMD_TOGGLE_FILENAME:
+            v->show_filename = !v->show_filename;
+            win_draw(v); break;
+        case CMD_TOGGLE_ZOOM:
+            v->show_zoom = !v->show_zoom;
+            win_draw(v); break;
+        case CMD_TOGGLE_FITMODE:
+            v->show_fitmode = !v->show_fitmode;
+            win_draw(v); break;
+        case CMD_TOGGLE_ROTATION_IND:
+            v->show_rotation = !v->show_rotation;
+            win_draw(v); break;
         case CMD_SCROLL_DOWN:
             if (v->pix_h > v->win_h) {
                 v->scroll_y -= sl * cnt;
@@ -293,6 +308,13 @@ int main(int argc, char **argv)
 
     /* X11 init */
     if (!win_init(&v)) return 1;
+    v.bar_visible              = showbar;
+    v.show_filename            = show_filename;
+    v.show_pagelabel           = show_pagelabel;
+    v.show_zoom                = show_zoom;
+    v.show_fitmode             = show_fitmode;
+    v.show_rotation            = show_rotation;
+    v.show_fullscreen_indicator = show_fullscreen_indicator;
     /* -F flag overrides config, otherwise use config default */
     if (opt_fs || startfullscreen)
         win_toggle_fullscreen(&v);

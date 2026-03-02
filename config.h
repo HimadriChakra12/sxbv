@@ -23,6 +23,14 @@ static const int startfullscreen = 1;
 static const char hitcolor[]    = "#fabd2f"; /* yellow  */
 static const char hitselcolor[] = "#fe8019"; /* orange  */
 
+static const int showbar                   = 0;
+static const int show_filename             = 1;
+static const int show_pagelabel            = 1;
+static const int show_zoom                 = 1;
+static const int show_fitmode              = 1;
+static const int show_rotation             = 1;
+static const int show_fullscreen_indicator = 0;
+
 /* Default zoom fit mode: FIT_PAGE, FIT_WIDTH, FIT_HEIGHT, FIT_NONE */
 #define DEFAULT_FIT       FIT_PAGE
 #define DEFAULT_ZOOM      1.0f
@@ -67,4 +75,9 @@ BIND(XK_f,         ShiftMask,   CMD_FULLSCREEN) \
     BIND(XK_n,         0,           CMD_SEARCH_NEXT) \
     BIND(XK_N,         0,           CMD_SEARCH_PREV) \
     BIND(XK_q,         0,           CMD_QUIT) \
+BIND(XK_b,         0,           CMD_TOGGLE_BAR)          \
+    BIND(XK_B,         ShiftMask,   CMD_TOGGLE_FILENAME)      \
+    BIND(XK_Z,         ShiftMask,   CMD_TOGGLE_ZOOM)          \
+    BIND(XK_T,         ShiftMask,   CMD_TOGGLE_FITMODE)       \
+    BIND(XK_D,         ShiftMask,   CMD_TOGGLE_ROTATION_IND)  \
     BIND(XK_Escape,    0,           CMD_QUIT)
