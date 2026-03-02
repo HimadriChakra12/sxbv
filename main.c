@@ -293,7 +293,9 @@ int main(int argc, char **argv)
 
     /* X11 init */
     if (!win_init(&v)) return 1;
-    if (opt_fs) win_toggle_fullscreen(&v);
+    /* -F flag overrides config, otherwise use config default */
+    if (opt_fs || startfullscreen)
+        win_toggle_fullscreen(&v);
 
     render_page(&v);
     win_draw(&v);

@@ -16,6 +16,8 @@ static const char statusfont[] =
 
 /* Page background color */
 static const char pagebg[] = "#1d2021";
+/* Start in fullscreen: 1 = yes, 0 = no */
+static const int startfullscreen = 1;
 
 /* Search highlight colors */
 static const char hitcolor[]    = "#fabd2f"; /* yellow  */
