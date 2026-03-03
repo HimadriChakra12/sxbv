@@ -178,6 +178,14 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 if (v->thumb_sel < 0) v->thumb_sel = 0;
                 thumb_scroll_to_sel(v); thumb_draw(v);
                 return;
+            case CMD_TOGGLE_BAR:
+                v->bar_visible = !v->bar_visible;
+                thumb_draw(v);
+                return;
+            case CMD_TOGGLE_FULLPATH:
+                v->show_fullpath = !v->show_fullpath;
+                thumb_draw(v);
+                return;
             case CMD_QUIT:
                 exit(0);
             default:
@@ -408,7 +416,6 @@ v.filename = expand_path(argv[i]);
     /* MUST come before any fz_open_document call */
     struct stat st;
     int is_dir = (stat(v.filename, &st) == 0 && S_ISDIR(st.st_mode));
-    fprintf(stderr, "debug: '%s' is_dir=%d\n", v.filename, is_dir);
 
     if (!is_dir) {
         fz_try(v.ctx) { v.doc = fz_open_document(v.ctx, v.filename); }
