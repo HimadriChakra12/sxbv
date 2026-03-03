@@ -39,9 +39,9 @@ static const int show_filename             = 1;
 static const int show_fullpath             = 0;
 static const int show_pagelabel            = 1;
 static const int show_zoom                 = 0;
-static const int show_fitmode              = 1;
-static const int show_rotation             = 1;
-static const int show_fullscreen_indicator = 1;
+static const int show_fitmode              = 0;
+static const int show_rotation             = 0;
+static const int show_fullscreen_indicator = 0;
 
 /* Default zoom fit mode: FIT_PAGE, FIT_WIDTH, FIT_HEIGHT, FIT_NONE */
 #define DEFAULT_FIT       FIT_PAGE
