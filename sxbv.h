@@ -138,6 +138,10 @@ typedef struct {
     char         *thumb_dir;    /* directory being browsed */
     int          filename_owned; /* 1 if filename was strdup'd and must be freed */
 
+    Pixmap       backbuf;        /* off-screen double buffer */
+    int          backbuf_w;
+    int          backbuf_h;
+
     /* numeric prefix */
     int          num_buf;
     int          num_valid;
@@ -165,6 +169,7 @@ void win_draw(Viewer *v);
 void win_update_title(Viewer *v);
 void win_toggle_fullscreen(Viewer *v);
 void win_draw_bar(Viewer *v);
+void win_draw_bar_to(Viewer *v, Drawable dst);
 
 /* search.c */
 void search_free(Viewer *v);

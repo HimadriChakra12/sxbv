@@ -3,8 +3,20 @@
 #include <string.h>
 #include "sxbv.h"
 
-/* forward declaration */
-static void draw_bar(Viewer *v);
+/* ------------------------------------------------------------------ */
+/* Backbuffer                                                           */
+
+void ensure_backbuf(Viewer *v)
+{
+    if (v->backbuf && v->backbuf_w == v->win_w && v->backbuf_h == v->win_h)
+        return;
+    if (v->backbuf) XFreePixmap(v->dpy, v->backbuf);
+    v->backbuf   = XCreatePixmap(v->dpy, v->win,
+                       v->win_w, v->win_h,
+                       DefaultDepth(v->dpy, v->screen));
+    v->backbuf_w = v->win_w;
+    v->backbuf_h = v->win_h;
+}
 
 /* ------------------------------------------------------------------ */
 /* Color helpers                                                        */
@@ -28,8 +40,8 @@ static void load_color(Viewer *v, SpdfColor *c, const char *spec)
 
 static void load_colors(Viewer *v)
 {
-    load_color(v, &v->c_bg,     bgcolor);    /* bar background */
-    load_color(v, &v->c_fg,     fgcolor);    /* text + separator */
+    load_color(v, &v->c_bg,     bgcolor);    /* bar bg = teal   */
+    load_color(v, &v->c_fg,     fgcolor);    /* bar text = dark */
     load_color(v, &v->c_mark,   hitcolor);
     load_color(v, &v->c_sel,    hitselcolor);
     load_color(v, &v->c_pagebg, pagebg);
@@ -66,25 +78,23 @@ static XftFont *load_font(Viewer *v, const char *spec)
 }
 
 /* ------------------------------------------------------------------ */
-/* Bar drawing                                                          */
+/* Bar drawing -- all drawing goes to dst                              */
 
-static void draw_bar(Viewer *v)
+static void draw_bar_to(Viewer *v, Drawable dst)
 {
-    int bx = 0;
     int by = topbar ? 0 : v->win_h - v->bar_h;
 
-    /* Background -- bgcolor */
+    /* Background */
     XSetForeground(v->dpy, v->gc, v->c_bg.pixel);
-    XFillRectangle(v->dpy, v->win, v->gc, bx, by, v->win_w, v->bar_h);
+    XFillRectangle(v->dpy, dst, v->gc, 0, by, v->win_w, v->bar_h);
 
-    /* Separator line -- fgcolor */
+    /* Separator line */
     XSetForeground(v->dpy, v->gc, v->c_fg.pixel);
     int ly = topbar ? by + v->bar_h - 1 : by;
-    XDrawLine(v->dpy, v->win, v->gc, 0, ly, v->win_w, ly);
+    XDrawLine(v->dpy, dst, v->gc, 0, ly, v->win_w, ly);
 
     /* Build left string */
     char left[512] = {0};
-
     if (v->mode == MODE_THUMB) {
         if (v->search_mode) {
             snprintf(left, sizeof left, "/ %s", v->search_buf);
@@ -114,9 +124,7 @@ static void draw_bar(Viewer *v)
     /* Build right string */
     char right[256] = {0};
     char tmp[64];
-
     if (v->mode == MODE_THUMB) {
-        /* thumb mode: show file count and loading progress */
         if (v->show_pagelabel) {
             snprintf(tmp, sizeof tmp, "%d/%d  ",
                      v->thumb_sel + 1, v->file_count);
@@ -130,8 +138,7 @@ static void draw_bar(Viewer *v)
         if (v->show_fullscreen_indicator && v->fullscreen)
             strcat(right, "[FS]");
     } else {
-        /* normal mode: existing logic */
-        if (v->show_pagelabel) {
+        if (v->show_pagelabel && v->doc) {
             char label[32] = {0};
             fz_page *pg = fz_load_page(v->ctx, v->doc, v->page);
             const char *lb = fz_page_label(v->ctx, pg, label, sizeof label);
@@ -166,23 +173,24 @@ static void draw_bar(Viewer *v)
             strcat(right, "[FS]");
     }
 
+    /* Redirect Xft to dst */
+    XftDrawChange(v->xftdraw, dst);
+
     /* Baseline */
     int baseline = by + (v->bar_h + v->font->ascent - v->font->descent) / 2;
 
-    /* Left text -- fgcolor */
+    /* Left text */
     XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
-        4, baseline,
-        (const FcChar8*)left, strlen(left));
+        4, baseline, (const FcChar8*)left, strlen(left));
 
-    /* Right text -- selcolor, right-aligned */
+    /* Right text, right-aligned */
     XGlyphInfo ext;
     XftTextExtentsUtf8(v->dpy, v->font,
         (const FcChar8*)right, strlen(right), &ext);
     int rx = v->win_w - ext.width - 6;
     if (rx > 4)
         XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
-                rx, baseline,
-                (const FcChar8*)right, strlen(right));
+            rx, baseline, (const FcChar8*)right, strlen(right));
 
     /* Cursor in search mode */
     if (v->search_mode) {
@@ -192,9 +200,25 @@ static void draw_bar(Viewer *v)
         XftTextExtentsUtf8(v->dpy, v->font,
             (const FcChar8*)cur, strlen(cur), &cext);
         XSetForeground(v->dpy, v->gc, v->c_fg.pixel);
-        XFillRectangle(v->dpy, v->win, v->gc,
+        XFillRectangle(v->dpy, dst, v->gc,
             4 + cext.width, by + 3, 1, v->bar_h - 6);
     }
+
+    /* Restore Xft to window */
+    XftDrawChange(v->xftdraw, v->win);
+}
+
+/* ------------------------------------------------------------------ */
+/* Public bar wrappers                                                  */
+
+void win_draw_bar(Viewer *v)
+{
+    draw_bar_to(v, v->win);
+}
+
+void win_draw_bar_to(Viewer *v, Drawable dst)
+{
+    draw_bar_to(v, dst);
 }
 
 /* ------------------------------------------------------------------ */
@@ -202,21 +226,20 @@ static void draw_bar(Viewer *v)
 
 void win_draw(Viewer *v)
 {
+    ensure_backbuf(v);
+    Drawable dst = v->backbuf;
+
     int bar_off = 0;
     int page_h  = v->win_h;
-
     if (v->bar_visible) {
         bar_off = topbar ? v->bar_h : 0;
         page_h  = v->win_h - v->bar_h;
     }
-
     int page_y = topbar ? bar_off : 0;
 
-    /* Page area background */
     XSetForeground(v->dpy, v->gc, v->c_pagebg.pixel);
-    XFillRectangle(v->dpy, v->win, v->gc, 0, page_y, v->win_w, page_h);
+    XFillRectangle(v->dpy, dst, v->gc, 0, page_y, v->win_w, page_h);
 
-    /* Page image */
     if (v->pix) {
         unsigned char *bgrx = to_bgrx(v);
         if (bgrx) {
@@ -233,7 +256,7 @@ void win_draw(Viewer *v)
                 int bot = page_y + page_h;
                 if (dy + dh > bot) dh = bot - dy;
                 if (dw > 0 && dh > 0)
-                    XPutImage(v->dpy, v->win, v->gc, img,
+                    XPutImage(v->dpy, dst, v->gc, img,
                         sx, sy, dx, dy, dw, dh);
                 img->data = NULL;
                 XDestroyImage(img);
@@ -244,6 +267,7 @@ void win_draw(Viewer *v)
 
     /* Search hit rectangles */
     if (v->hit_count > 0) {
+        int bar_off2 = v->bar_visible && topbar ? v->bar_h : 0;
         fz_matrix m = page_matrix(v);
         for (int i = 0; i < v->hit_count; i++) {
             fz_quad  q      = v->hits[i];
@@ -258,16 +282,19 @@ void win_draw(Viewer *v)
             }
             XSetForeground(v->dpy, v->gc,
                 (i == v->hit) ? v->c_sel.pixel : v->c_mark.pixel);
-            XDrawRectangle(v->dpy, v->win, v->gc,
+            XDrawRectangle(v->dpy, dst, v->gc,
                 (int)x0 + v->scroll_x,
-                (int)y0 + v->scroll_y + bar_off,
+                (int)y0 + v->scroll_y + bar_off2,
                 (int)(x1 - x0), (int)(y1 - y0));
         }
     }
 
-    /* Status bar -- only if visible */
     if (v->bar_visible)
-        draw_bar(v);
+        draw_bar_to(v, dst);
+
+    XCopyArea(v->dpy, dst, v->win, v->gc,
+        0, 0, v->win_w, v->win_h, 0, 0);
+    XFlush(v->dpy);
 }
 
 /* ------------------------------------------------------------------ */
@@ -291,9 +318,9 @@ int win_init(Viewer *v)
         ? v->font->ascent + v->font->descent + 6
         : 20;
 
-    v->win = XCreateSimpleWindow(v->dpy, RootWindow(v->dpy, v->screen),
+v->win = XCreateSimpleWindow(v->dpy, RootWindow(v->dpy, v->screen),
         0, 0, v->win_w, v->win_h, 0,
-        v->c_bg.pixel, v->c_bg.pixel);
+        v->c_pagebg.pixel, v->c_pagebg.pixel);
 
     v->wm_delete         = XInternAtom(v->dpy, "WM_DELETE_WINDOW", False);
     v->net_wm_state      = XInternAtom(v->dpy, "_NET_WM_STATE", False);
@@ -332,7 +359,6 @@ void win_update_title(Viewer *v)
     XStoreName(v->dpy, v->win, buf);
 }
 
-/* saved geometry for restoring from fullscreen */
 static int saved_x, saved_y, saved_w, saved_h;
 
 void win_toggle_fullscreen(Viewer *v)
@@ -397,9 +423,4 @@ void win_toggle_fullscreen(Viewer *v)
     }
 
     XFlush(v->dpy);
-}
-
-void win_draw_bar(Viewer *v)
-{
-    draw_bar(v);
 }

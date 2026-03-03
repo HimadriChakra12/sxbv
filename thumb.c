@@ -7,6 +7,8 @@
 #include <math.h>
 #include "sxbv.h"
 
+/* forward declaration from window.c */
+void ensure_backbuf(Viewer *v);
 static const char *thumb_exts[] = {
     ".pdf", ".epub", ".cbz", ".cbr", ".xps", ".fb2",
     ".mobi",
@@ -226,6 +228,9 @@ void thumb_scroll_to_sel(Viewer *v)
 
 void thumb_draw(Viewer *v)
 {
+    ensure_backbuf(v);
+    Drawable dst = v->backbuf;
+
     v->thumb_cols = v->win_w / (v->thumb_w + THUMB_PADDING);
     if (v->thumb_cols < 1) v->thumb_cols = 1;
 
@@ -236,7 +241,7 @@ void thumb_draw(Viewer *v)
 
     /* background */
     XSetForeground(v->dpy, v->gc, v->c_pagebg.pixel);
-    XFillRectangle(v->dpy, v->win, v->gc, 0, page_y, v->win_w, page_h);
+    XFillRectangle(v->dpy, dst, v->gc, 0, page_y, v->win_w, page_h);
 
     int grid_w = v->thumb_cols * cell_w - THUMB_PADDING;
     int grid_x = (v->win_w - grid_w) / 2;
@@ -244,76 +249,75 @@ void thumb_draw(Viewer *v)
     for (int i = 0; i < v->file_count; i++) {
         int row = i / v->thumb_cols;
         int col = i % v->thumb_cols;
-
-        int x = grid_x + col * cell_w;
-        int y = page_y + THUMB_PADDING/2 + row * cell_h - v->thumb_scroll;
+        int x   = grid_x + col * cell_w;
+        int y   = page_y + THUMB_PADDING/2 + row * cell_h - v->thumb_scroll;
 
         if (y + cell_h < page_y) continue;
         if (y > page_y + page_h) break;
 
         ThumbEntry *e = &v->files[i];
 
-        /* selection border -- fgcolor (bgcolor = dark, so border = fgcolor = teal) */
+        /* selection border */
         if (i == v->thumb_sel) {
             XSetForeground(v->dpy, v->gc, v->c_bg.pixel);
-            XFillRectangle(v->dpy, v->win, v->gc,
-                x - THUMB_SELBORDER,
-                y - THUMB_SELBORDER,
-                v->thumb_w + THUMB_SELBORDER * 2,
-                v->thumb_h + THUMB_LABEL_H + THUMB_SELBORDER * 2);
+            XFillRectangle(v->dpy, dst, v->gc,
+                x - THUMB_SELBORDER, y - THUMB_SELBORDER,
+                v->thumb_w + THUMB_SELBORDER*2,
+                v->thumb_h + THUMB_LABEL_H + THUMB_SELBORDER*2);
         }
 
-        /* placeholder or rendered image */
         if (e->img) {
-            XPutImage(v->dpy, v->win, v->gc, e->img,
+            /* redirect XPutImage to backbuf */
+            XPutImage(v->dpy, dst, v->gc, e->img,
                 0, 0, x, y, v->thumb_w, v->thumb_h);
         } else {
-            /* placeholder box in bar bg color */
             XSetForeground(v->dpy, v->gc, v->c_bg.pixel);
-            XFillRectangle(v->dpy, v->win, v->gc,
+            XFillRectangle(v->dpy, dst, v->gc,
                 x, y, v->thumb_w, v->thumb_h);
-            /* centered index number */
             char num[16];
             snprintf(num, sizeof num, "%d", i + 1);
             XGlyphInfo ext;
             XftTextExtentsUtf8(v->dpy, v->font,
                 (const FcChar8*)num, strlen(num), &ext);
+            XftDrawChange(v->xftdraw, dst);
             XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
                 x + (v->thumb_w - ext.width) / 2,
                 y + (v->thumb_h + v->font->ascent) / 2,
                 (const FcChar8*)num, strlen(num));
         }
 
-        /* label background -- pagebg so it's clean */
+        /* label bg */
         XSetForeground(v->dpy, v->gc, v->c_pagebg.pixel);
-        XFillRectangle(v->dpy, v->win, v->gc,
+        XFillRectangle(v->dpy, dst, v->gc,
             x, y + v->thumb_h, v->thumb_w, THUMB_LABEL_H);
 
-        /* filename label -- centered, fgcolor normally, bgcolor if selected */
+        /* label text */
         int label_y = y + v->thumb_h + THUMB_PADDING/2 + v->font->ascent;
         char label[256];
         snprintf(label, sizeof label, "%s", e->name);
         XGlyphInfo ext;
         XftTextExtentsUtf8(v->dpy, v->font,
             (const FcChar8*)label, strlen(label), &ext);
-        /* truncate with ellipsis */
         while (ext.width > v->thumb_w && strlen(label) > 4) {
             size_t l = strlen(label);
-            label[l-4] = '.';
-            label[l-3] = '.';
-            label[l-2] = '.';
-            label[l-1] = '\0';
+            label[l-4] = '.'; label[l-3] = '.';
+            label[l-2] = '.'; label[l-1] = '\0';
             XftTextExtentsUtf8(v->dpy, v->font,
                 (const FcChar8*)label, strlen(label), &ext);
         }
         int lx = x + (v->thumb_w - ext.width) / 2;
-        /* selected label = bgcolor (dark text on teal border) else fgcolor */
-        XftColor *lcol = (i == v->thumb_sel) ? &v->c_fg.xft : &v->c_fg.xft;
-        XftDrawStringUtf8(v->xftdraw, lcol, v->font,
-            lx, label_y,
-            (const FcChar8*)label, strlen(label));
+        XftDrawChange(v->xftdraw, dst);
+        XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
+            lx, label_y, (const FcChar8*)label, strlen(label));
     }
 
+    /* bar */
     if (v->bar_visible)
-        win_draw_bar(v);
+        win_draw_bar_to(v, dst);
+
+    /* restore xftdraw and flip */
+    XftDrawChange(v->xftdraw, v->win);
+    XCopyArea(v->dpy, dst, v->win, v->gc,
+        0, 0, v->win_w, v->win_h, 0, 0);
+    XFlush(v->dpy);
 }
