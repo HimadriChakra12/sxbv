@@ -82,68 +82,89 @@ static void draw_bar(Viewer *v)
     int ly = topbar ? by + v->bar_h - 1 : by;
     XDrawLine(v->dpy, v->win, v->gc, 0, ly, v->win_w, ly);
 
-    /* Resolve display name: basename or full path */
-    const char *dispname;
-    if (v->show_fullpath) {
-        dispname = v->filename;
-    } else {
-        const char *slash = strrchr(v->filename, '/');
-        dispname = slash ? slash + 1 : v->filename;
-    }
-
     /* Build left string */
     char left[512] = {0};
-    if (v->search_mode) {
-        snprintf(left, sizeof left, "/ %s", v->search_buf);
-    } else if (v->hit_count > 0) {
-        snprintf(left, sizeof left, "match %d/%d  %s",
-                 v->hit + 1, v->hit_count,
-                 v->show_filename ? dispname : "");
-    } else if (v->show_filename) {
-        snprintf(left, sizeof left, "%s", dispname);
+
+    if (v->mode == MODE_THUMB) {
+        if (v->search_mode)
+            snprintf(left, sizeof left, "/ %s", v->search_buf);
+        else if (v->thumb_dir) {
+            const char *slash = strrchr(v->thumb_dir, '/');
+            snprintf(left, sizeof left, "%s",
+                     v->show_fullpath ? v->thumb_dir
+                                      : (slash ? slash + 1 : v->thumb_dir));
+        }
+    } else {
+        if (v->search_mode) {
+            snprintf(left, sizeof left, "/ %s", v->search_buf);
+        } else if (v->hit_count > 0) {
+            snprintf(left, sizeof left, "match %d/%d  %s",
+                     v->hit + 1, v->hit_count,
+                     v->show_filename ? (v->show_fullpath ? v->filename :
+                         (strrchr(v->filename,'/') ? strrchr(v->filename,'/')+1
+                                                   : v->filename)) : "");
+        } else if (v->show_filename) {
+            const char *slash = strrchr(v->filename, '/');
+            snprintf(left, sizeof left, "%s",
+                     v->show_fullpath ? v->filename
+                                      : (slash ? slash + 1 : v->filename));
+        }
     }
 
     /* Build right string */
     char right[256] = {0};
     char tmp[64];
 
-    if (v->show_pagelabel) {
-        char label[32] = {0};
-        fz_page *pg = fz_load_page(v->ctx, v->doc, v->page);
-        const char *lb = fz_page_label(v->ctx, pg, label, sizeof label);
-        fz_drop_page(v->ctx, pg);
-        if (lb && lb[0])
-            snprintf(tmp, sizeof tmp, "%s (%d/%d)  ",
-                     lb, v->page + 1, v->page_count);
-        else
+    if (v->mode == MODE_THUMB) {
+        /* thumb mode: show file count and loading progress */
+        if (v->show_pagelabel) {
             snprintf(tmp, sizeof tmp, "%d/%d  ",
-                     v->page + 1, v->page_count);
-        strcat(right, tmp);
-    }
-
-    if (v->show_zoom) {
-        snprintf(tmp, sizeof tmp, "%.0f%%  ", v->zoom * 100.0f);
-        strcat(right, tmp);
-    }
-
-    if (v->show_fitmode) {
-        const char *fs = "";
-        switch (v->fit) {
-            case FIT_WIDTH:  fs = "[W]  "; break;
-            case FIT_HEIGHT: fs = "[H]  "; break;
-            case FIT_PAGE:   fs = "[F]  "; break;
-            default: break;
+                     v->thumb_sel + 1, v->file_count);
+            strcat(right, tmp);
         }
-        strcat(right, fs);
+        if (v->thumb_next < v->file_count) {
+            snprintf(tmp, sizeof tmp, "loading %d%%  ",
+                     (v->thumb_next * 100) / (v->file_count > 0 ? v->file_count : 1));
+            strcat(right, tmp);
+        }
+        if (v->show_fullscreen_indicator && v->fullscreen)
+            strcat(right, "[FS]");
+    } else {
+        /* normal mode: existing logic */
+        if (v->show_pagelabel) {
+            char label[32] = {0};
+            fz_page *pg = fz_load_page(v->ctx, v->doc, v->page);
+            const char *lb = fz_page_label(v->ctx, pg, label, sizeof label);
+            fz_drop_page(v->ctx, pg);
+            if (lb && lb[0])
+                snprintf(tmp, sizeof tmp, "%s (%d/%d)  ",
+                         lb, v->page + 1, v->page_count);
+            else
+                snprintf(tmp, sizeof tmp, "%d/%d  ",
+                         v->page + 1, v->page_count);
+            strcat(right, tmp);
+        }
+        if (v->show_zoom) {
+            snprintf(tmp, sizeof tmp, "%.0f%%  ", v->zoom * 100.0f);
+            strcat(right, tmp);
+        }
+        if (v->show_fitmode) {
+            const char *fs = "";
+            switch (v->fit) {
+                case FIT_WIDTH:  fs = "[W]  "; break;
+                case FIT_HEIGHT: fs = "[H]  "; break;
+                case FIT_PAGE:   fs = "[F]  "; break;
+                default: break;
+            }
+            strcat(right, fs);
+        }
+        if (v->show_rotation && v->rotation != 0) {
+            snprintf(tmp, sizeof tmp, "%d°  ", v->rotation);
+            strcat(right, tmp);
+        }
+        if (v->show_fullscreen_indicator && v->fullscreen)
+            strcat(right, "[FS]");
     }
-
-    if (v->show_rotation && v->rotation != 0) {
-        snprintf(tmp, sizeof tmp, "%d°  ", v->rotation);
-        strcat(right, tmp);
-    }
-
-    if (v->show_fullscreen_indicator && v->fullscreen)
-        strcat(right, "[FS]");
 
     /* Baseline */
     int baseline = by + (v->bar_h + v->font->ascent - v->font->descent) / 2;
@@ -376,4 +397,9 @@ void win_toggle_fullscreen(Viewer *v)
     }
 
     XFlush(v->dpy);
+}
+
+void win_draw_bar(Viewer *v)
+{
+    draw_bar(v);
 }

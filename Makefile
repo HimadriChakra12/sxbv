@@ -5,7 +5,7 @@ LDFLAGS = -lX11 -lmupdf -lm $(shell pkg-config --libs xft fontconfig)
 PREFIX  = /usr/local
 BINDIR  = $(PREFIX)/bin
 
-SRC = main.c image.c window.c search.c
+SRC = main.c image.c window.c search.c thumb.c
 OBJ = $(SRC:.c=.o)
 
 all: sxbv

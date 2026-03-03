@@ -5,8 +5,16 @@
 #include "sxbv.h"
 
 /* ------------------------------------------------------------------ */
+static const char *expand_path(const char *path)
+{
+    if (path[0] != '~') return path;
+    const char *home = getenv("HOME");
+    if (!home) return path;
+    static char buf[4096];
+    snprintf(buf, sizeof buf, "%s%s", home, path + 1);
+    return buf;
+}
 /* Helpers                                                              */
-
 void clamp_scroll(Viewer *v)
 {
     if (v->pix_w <= v->win_w) {
@@ -91,13 +99,131 @@ static void run_command(Viewer *v, Command cmd, int cnt)
     int sl = SCROLL_LINE;
     int sp = (int)(v->win_h * SCROLL_PAGE_FRAC);
 
+    /* ---- thumb mode ---- */
+    if (v->mode == MODE_THUMB) {
+        switch (cmd) {
+            /* h -- prev file */
+            case CMD_PREV_PAGE:
+                if (v->thumb_sel > 0) v->thumb_sel--;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            /* l -- next file */
+            case CMD_NEXT_PAGE:
+                if (v->thumb_sel < v->file_count - 1) v->thumb_sel++;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            case CMD_TOGGLE_THUMB:
+                /* t in thumb mode = back to open doc if any */
+                if (v->doc) {
+                    thumb_free(v);
+                    v->mode = MODE_NORMAL;
+                    render_page(v);
+                    win_draw(v);
+                }
+                return;
+            case CMD_THUMB_OPEN: {
+                /* Enter in thumb mode = open selected file */
+                if (v->file_count == 0) return;
+                ThumbEntry *e = &v->files[v->thumb_sel];
+                if (v->doc) { fz_drop_document(v->ctx, v->doc); v->doc = NULL; }
+                if (v->pix) { fz_drop_pixmap(v->ctx, v->pix);  v->pix = NULL; }
+                fz_try(v->ctx) { v->doc = fz_open_document(v->ctx, e->path); }
+                fz_catch(v->ctx) { v->doc = NULL; }
+                if (!v->doc) return;
+                v->filename   = e->path;
+                v->page_count = fz_count_pages(v->ctx, v->doc);
+                v->page       = 0;
+                thumb_free(v);
+                v->mode = MODE_NORMAL;
+                render_page(v);
+                win_draw(v);
+                return;
+            }
+            /* j/Down */
+            case CMD_SCROLL_DOWN:
+                v->thumb_sel += v->thumb_cols;
+                if (v->thumb_sel >= v->file_count)
+                    v->thumb_sel = v->file_count - 1;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            /* k/Up */
+            case CMD_SCROLL_UP:
+                v->thumb_sel -= v->thumb_cols;
+                if (v->thumb_sel < 0) v->thumb_sel = 0;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            /* h/Left */
+            case CMD_SCROLL_LEFT:
+                if (v->thumb_sel > 0) v->thumb_sel--;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            /* l/Right */
+            case CMD_SCROLL_RIGHT:
+                if (v->thumb_sel < v->file_count - 1) v->thumb_sel++;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            /* g -- go to first or Ng */
+            case CMD_FIRST_PAGE:
+                v->thumb_sel = cnt > 1 ? cnt - 1 : 0;
+                if (v->thumb_sel >= v->file_count)
+                    v->thumb_sel = v->file_count - 1;
+                v->thumb_scroll = 0;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            /* G -- go to last or Ng */
+            case CMD_LAST_PAGE:
+                v->thumb_sel = cnt > 1 ? cnt - 1 : v->file_count - 1;
+                if (v->thumb_sel >= v->file_count)
+                    v->thumb_sel = v->file_count - 1;
+                if (v->thumb_sel < 0) v->thumb_sel = 0;
+                thumb_scroll_to_sel(v); thumb_draw(v);
+                return;
+            case CMD_QUIT:
+                exit(0);
+            default:
+                return;
+        }
+    }
+
+    /* ---- normal mode ---- */
     switch (cmd) {
+        case CMD_THUMB_OPEN: {
+            /* Enter in normal mode = go to thumb browser */
+            char dir[4096];
+            snprintf(dir, sizeof dir, "%s", v->filename);
+            char *slash = strrchr(dir, '/');
+            if (slash) *slash = '\0';
+            else snprintf(dir, sizeof dir, ".");
+            v->mode = MODE_THUMB;
+            thumb_init_dir(v, dir);
+            thumb_draw(v);
+            return;
+        }
+        case CMD_TOGGLE_THUMB:
+            /* t in normal mode = same as Enter */
+            {
+                char dir[4096];
+                snprintf(dir, sizeof dir, "%s", v->filename);
+                char *slash = strrchr(dir, '/');
+                if (slash) *slash = '\0';
+                else snprintf(dir, sizeof dir, ".");
+                v->mode = MODE_THUMB;
+                thumb_init_dir(v, dir);
+                thumb_draw(v);
+            }
+            return;
         case CMD_TOGGLE_FULLPATH:
             v->show_fullpath = !v->show_fullpath;
             win_draw(v); break;
         case CMD_TOGGLE_BAR:
             v->bar_visible = !v->bar_visible;
-            render_page(v); win_draw(v); break;
+            if (v->mode == MODE_THUMB)
+                thumb_draw(v);
+            else {
+                render_page(v);
+                win_draw(v);
+            }
+            break;
         case CMD_TOGGLE_FILENAME:
             v->show_filename = !v->show_filename;
             win_draw(v); break;
@@ -111,83 +237,58 @@ static void run_command(Viewer *v, Command cmd, int cnt)
             v->show_rotation = !v->show_rotation;
             win_draw(v); break;
         case CMD_SCROLL_DOWN:
-            if (v->pix_h > v->win_h) {
-                v->scroll_y -= sl * cnt;
-                clamp_scroll(v);
-            } else {
-                go_page(v, v->page + cnt);
-            }
+            if (v->pix_h > v->win_h) { v->scroll_y -= sl*cnt; clamp_scroll(v); }
+            else go_page(v, v->page + cnt);
             break;
         case CMD_SCROLL_UP:
-            if (v->pix_h > v->win_h) {
-                v->scroll_y += sl * cnt;
-                clamp_scroll(v);
-            } else {
-                go_page(v, v->page - cnt);
-            }
+            if (v->pix_h > v->win_h) { v->scroll_y += sl*cnt; clamp_scroll(v); }
+            else go_page(v, v->page - cnt);
             break;
         case CMD_SCROLL_LEFT:
-            v->scroll_x += sl * cnt;
-            clamp_scroll(v);
-            break;
+            v->scroll_x += sl*cnt; clamp_scroll(v); break;
         case CMD_SCROLL_RIGHT:
-            v->scroll_x -= sl * cnt;
-            clamp_scroll(v);
-            break;
+            v->scroll_x -= sl*cnt; clamp_scroll(v); break;
         case CMD_SCREEN_DOWN:
             if (v->pix_h > v->win_h) {
                 int prev = v->scroll_y;
-                v->scroll_y -= sp;
-                clamp_scroll(v);
+                v->scroll_y -= sp; clamp_scroll(v);
                 if (v->scroll_y == prev) go_page(v, v->page + 1);
-            } else {
-                go_page(v, v->page + cnt);
-            }
+            } else go_page(v, v->page + cnt);
             break;
         case CMD_SCREEN_UP:
             if (v->pix_h > v->win_h) {
                 int prev = v->scroll_y;
-                v->scroll_y += sp;
-                clamp_scroll(v);
+                v->scroll_y += sp; clamp_scroll(v);
                 if (v->scroll_y == prev) go_page(v, v->page - 1);
-            } else {
-                go_page(v, v->page - cnt);
-            }
+            } else go_page(v, v->page - cnt);
             break;
-        case CMD_NEXT_PAGE:    go_page(v, v->page + cnt); break;
-        case CMD_PREV_PAGE:    go_page(v, v->page - cnt); break;
-        case CMD_FIRST_PAGE:   go_page(v, cnt > 1 ? cnt - 1 : 0); break;
-        case CMD_LAST_PAGE:    go_page(v, cnt > 1 ? cnt - 1 : v->page_count - 1); break;
-        case CMD_ZOOM_IN:      zoom_by(v,  ZOOM_STEP * cnt); break;
-        case CMD_ZOOM_OUT:     zoom_by(v, -ZOOM_STEP * cnt); break;
-        case CMD_ZOOM_RESET:   v->fit = FIT_NONE; v->zoom = DEFAULT_ZOOM; render_page(v); break;
-        case CMD_FIT_WIDTH:    v->fit = FIT_WIDTH;  render_page(v); break;
-        case CMD_FIT_HEIGHT:   v->fit = FIT_HEIGHT; render_page(v); break;
-        case CMD_FIT_PAGE:     v->fit = FIT_PAGE;   render_page(v); break;
-        case CMD_ROTATE_CW:    v->rotation = (v->rotation + 90)  % 360; render_page(v); break;
-        case CMD_ROTATE_CCW:   v->rotation = (v->rotation + 270) % 360; render_page(v); break;
-        case CMD_FULLSCREEN:   win_toggle_fullscreen(v); break;
+        case CMD_NEXT_PAGE:  go_page(v, v->page + cnt); break;
+        case CMD_PREV_PAGE:  go_page(v, v->page - cnt); break;
+        case CMD_FIRST_PAGE: go_page(v, cnt > 1 ? cnt - 1 : 0); break;
+        case CMD_LAST_PAGE:  go_page(v, cnt > 1 ? cnt - 1 : v->page_count - 1); break;
+        case CMD_ZOOM_IN:    zoom_by(v,  ZOOM_STEP * cnt); break;
+        case CMD_ZOOM_OUT:   zoom_by(v, -ZOOM_STEP * cnt); break;
+        case CMD_ZOOM_RESET: v->fit = FIT_NONE; v->zoom = DEFAULT_ZOOM; render_page(v); break;
+        case CMD_FIT_WIDTH:  v->fit = FIT_WIDTH;  render_page(v); break;
+        case CMD_FIT_HEIGHT: v->fit = FIT_HEIGHT; render_page(v); break;
+        case CMD_FIT_PAGE:   v->fit = FIT_PAGE;   render_page(v); break;
+        case CMD_ROTATE_CW:  v->rotation = (v->rotation + 90)  % 360; render_page(v); break;
+        case CMD_ROTATE_CCW: v->rotation = (v->rotation + 270) % 360; render_page(v); break;
+        case CMD_FULLSCREEN: win_toggle_fullscreen(v); break;
         case CMD_SEARCH_START:
-            v->search_mode   = 1;
-            v->search_dir    = 1;
-            v->search_buf[0] = '\0';
-            break;
+            v->search_mode = 1; v->search_dir = 1; v->search_buf[0] = '\0'; break;
         case CMD_SEARCH_NEXT:
-            if (v->hit_count > 0)
-                v->hit = (v->hit + 1) % v->hit_count;
-            else
-                search_do(v, 1);
+            if (v->hit_count > 0) v->hit = (v->hit + 1) % v->hit_count;
+            else search_do(v, 1);
             break;
         case CMD_SEARCH_PREV:
-            if (v->hit_count > 0)
-                v->hit = (v->hit - 1 + v->hit_count) % v->hit_count;
-            else
-                search_do(v, -1);
+            if (v->hit_count > 0) v->hit = (v->hit - 1 + v->hit_count) % v->hit_count;
+            else search_do(v, -1);
             break;
         case CMD_QUIT:
             exit(0);
         default:
-            return; /* unknown command, don't redraw */
+            return;
     }
     win_draw(v);
 }
@@ -296,43 +397,71 @@ int main(int argc, char **argv)
         }
     }
     if (i >= argc) { usage(argv[0]); return 1; }
-    v.filename = argv[i];
+v.filename = expand_path(argv[i]);
 
-    /* MuPDF init */
+    /* MuPDF context only -- no doc open yet */
     v.ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
     if (!v.ctx) { fprintf(stderr, "sxbv: cannot create mupdf context\n"); return 1; }
     fz_register_document_handlers(v.ctx);
-    fz_try(v.ctx) { v.doc = fz_open_document(v.ctx, v.filename); }
-    fz_catch(v.ctx) { v.doc = NULL; }
-    if (!v.doc) { fprintf(stderr, "sxbv: cannot open: %s\n", v.filename); return 1; }
-    v.page_count = fz_count_pages(v.ctx, v.doc);
-    if (v.page_count <= 0) { fprintf(stderr, "sxbv: no pages\n"); return 1; }
-    v.page = (opt_page >= 0 && opt_page < v.page_count) ? opt_page : 0;
+    fz_set_warning_callback(v.ctx, NULL, NULL);
+
+    /* MUST come before any fz_open_document call */
+    struct stat st;
+    int is_dir = (stat(v.filename, &st) == 0 && S_ISDIR(st.st_mode));
+    fprintf(stderr, "debug: '%s' is_dir=%d\n", v.filename, is_dir);
+
+    if (!is_dir) {
+        fz_try(v.ctx) { v.doc = fz_open_document(v.ctx, v.filename); }
+        fz_catch(v.ctx) { v.doc = NULL; }
+        if (!v.doc) { fprintf(stderr, "sxbv: cannot open: %s\n", v.filename); return 1; }
+        v.page_count = fz_count_pages(v.ctx, v.doc);
+        if (v.page_count <= 0) { fprintf(stderr, "sxbv: no pages\n"); return 1; }
+        v.page = (opt_page >= 0 && opt_page < v.page_count) ? opt_page : 0;
+    }
 
     /* X11 init */
-    if (!win_init(&v)) return 1;
-    v.bar_visible              = showbar;
-    v.show_filename            = show_filename;
-    v.show_fullpath            = show_fullpath;
-    v.show_pagelabel           = show_pagelabel;
-    v.show_zoom                = show_zoom;
-    v.show_fitmode             = show_fitmode;
-    v.show_rotation            = show_rotation;
+    v.show_filename             = show_filename;
+    v.show_pagelabel            = show_pagelabel;
+    v.show_zoom                 = show_zoom;
+    v.show_fitmode              = show_fitmode;
+    v.show_rotation             = show_rotation;
     v.show_fullscreen_indicator = show_fullscreen_indicator;
-    /* -F flag overrides config, otherwise use config default */
-    if (opt_fs || startfullscreen)
-        win_toggle_fullscreen(&v);
+    v.show_fullpath             = show_fullpath;
 
-    render_page(&v);
-    win_draw(&v);
+    if (!win_init(&v)) return 1;   /* only once */
+    v.bar_visible = showbar;
+
+    if (is_dir) {
+        v.mode = MODE_THUMB;
+        thumb_init_dir(&v, v.filename);
+        thumb_draw(&v);
+        if (opt_fs || startfullscreen)
+            win_toggle_fullscreen(&v);
+    } else {
+        if (opt_fs || startfullscreen)
+            win_toggle_fullscreen(&v);
+        v.mode = MODE_NORMAL;
+        render_page(&v);
+        win_draw(&v);
+    }
 
     /* Event loop */
     XEvent ev;
     for (;;) {
+        if (v.mode == MODE_THUMB && v.thumb_next < v.file_count) {
+            if (!XPending(v.dpy)) {
+                thumb_render_next(&v);
+                thumb_draw(&v);
+                continue;
+            }
+        }
         XNextEvent(v.dpy, &ev);
         switch (ev.type) {
             case Expose:
-                if (ev.xexpose.count == 0) win_draw(&v);
+                if (ev.xexpose.count == 0) {
+                    if (v.mode == MODE_THUMB) thumb_draw(&v);
+                    else win_draw(&v);
+                }
                 break;
             case KeyPress:
                 handle_key(&v, &ev.xkey);
@@ -341,19 +470,19 @@ int main(int argc, char **argv)
                 handle_button(&v, &ev.xbutton);
                 break;
             case ConfigureNotify: {
-                XConfigureEvent *ce = &ev.xconfigure;
-                if (ce->width != v.win_w || ce->height != v.win_h) {
-                    v.win_w = ce->width;
-                    v.win_h = ce->height;
-                    render_page(&v);
-                    win_draw(&v);
-                }
-                break;
-            }
+                                      XConfigureEvent *ce = &ev.xconfigure;
+                                      if (ce->width != v.win_w || ce->height != v.win_h) {
+                                          v.win_w = ce->width;
+                                          v.win_h = ce->height;
+                                          if (v.mode == MODE_THUMB) thumb_draw(&v);
+                                          else { render_page(&v); win_draw(&v); }
+                                      }
+                                      break;
+                                  }
             case ClientMessage:
-                if ((Atom)ev.xclient.data.l[0] == v.wm_delete)
-                    goto quit;
-                break;
+                                  if ((Atom)ev.xclient.data.l[0] == v.wm_delete)
+                                      goto quit;
+                                  break;
         }
     }
 quit:
