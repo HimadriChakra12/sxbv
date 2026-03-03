@@ -33,7 +33,8 @@ static const char hitselcolor[] = "#fe8019"; /* orange  */
 /* Toggle thumbnail mode */
 /* Enter in thumb mode opens page, t toggles thumb mode */
 
-static const int showbar                   = 0;
+static const int showbar_thumb             = 1;
+static const int showbar_normal            = 0;
 static const int show_filename             = 1;
 static const int show_fullpath             = 0;
 static const int show_pagelabel            = 1;

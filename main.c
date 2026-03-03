@@ -135,6 +135,7 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 v->page       = 0;
                 thumb_free(v);
                 v->mode = MODE_NORMAL;
+                v->bar_visible = showbar_normal;
                 render_page(v);
                 win_draw(v);
                 return;
@@ -203,6 +204,7 @@ static void run_command(Viewer *v, Command cmd, int cnt)
             if (slash) *slash = '\0';
             else snprintf(dir, sizeof dir, ".");
             v->mode = MODE_THUMB;
+            v->bar_visible = showbar_thumb;
             thumb_init_dir(v, dir);
             thumb_draw(v);
             return;
@@ -216,8 +218,13 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 if (slash) *slash = '\0';
                 else snprintf(dir, sizeof dir, ".");
                 v->mode = MODE_THUMB;
+                v->bar_visible = showbar_thumb;
                 thumb_init_dir(v, dir);
-                thumb_draw(v);
+                thumb_free(v);
+                v->mode = MODE_NORMAL;
+                v->bar_visible = showbar_normal;
+                render_page(v);
+                win_draw(v);
             }
             return;
         case CMD_TOGGLE_FULLPATH:
@@ -436,7 +443,7 @@ v.filename = expand_path(argv[i]);
     v.show_fullpath             = show_fullpath;
 
     if (!win_init(&v)) return 1;   /* only once */
-    v.bar_visible = showbar;
+    v.bar_visible = (is_dir) ? showbar_thumb : showbar_normal;
 
     if (is_dir) {
         v.mode = MODE_THUMB;

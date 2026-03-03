@@ -86,13 +86,13 @@ static void draw_bar(Viewer *v)
     char left[512] = {0};
 
     if (v->mode == MODE_THUMB) {
-        if (v->search_mode)
+        if (v->search_mode) {
             snprintf(left, sizeof left, "/ %s", v->search_buf);
-        else if (v->thumb_dir) {
-            const char *slash = strrchr(v->thumb_dir, '/');
+        } else if (v->file_count > 0 && v->files) {
+            const char *path = v->files[v->thumb_sel].path;
+            const char *name = v->files[v->thumb_sel].name;
             snprintf(left, sizeof left, "%s",
-                     v->show_fullpath ? v->thumb_dir
-                                      : (slash ? slash + 1 : v->thumb_dir));
+                     v->show_fullpath ? path : name);
         }
     } else {
         if (v->search_mode) {
