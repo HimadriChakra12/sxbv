@@ -81,18 +81,18 @@ static const int show_fullscreen_indicator = 0;
     BIND(XK_e,         0,           CMD_FIT_HEIGHT)          \
     BIND(XK_f,         0,           CMD_FIT_PAGE)            \
     BIND(XK_r,         0,           CMD_ROTATE_CW)           \
-    BIND(XK_R,         ShiftMask,   CMD_ROTATE_CCW)          \
+    BIND(XK_r,         ShiftMask,   CMD_ROTATE_CCW)          \
     BIND(XK_F,         ShiftMask,   CMD_FULLSCREEN)          \
     BIND(XK_slash,     0,           CMD_SEARCH_START)        \
     BIND(XK_n,         0,           CMD_SEARCH_NEXT)         \
-    BIND(XK_N,         ShiftMask,   CMD_SEARCH_PREV)         \
+    BIND(XK_n,         ShiftMask,   CMD_SEARCH_PREV)         \
     BIND(XK_t,         0,           CMD_TOGGLE_THUMB)        \
     BIND(XK_Return,    0,           CMD_THUMB_OPEN)          \
     BIND(XK_b,         0,           CMD_TOGGLE_BAR)          \
-    BIND(XK_B,         ShiftMask,   CMD_TOGGLE_FILENAME)     \
-    BIND(XK_Z,         ShiftMask,   CMD_TOGGLE_ZOOM)         \
-    BIND(XK_T,         ShiftMask,   CMD_TOGGLE_FITMODE)      \
-    BIND(XK_D,         ShiftMask,   CMD_TOGGLE_ROTATION_IND) \
+    BIND(XK_b,         ShiftMask,   CMD_TOGGLE_FILENAME)     \
+    BIND(XK_z,         ShiftMask,   CMD_TOGGLE_ZOOM)         \
+    BIND(XK_t,         ShiftMask,   CMD_TOGGLE_FITMODE)      \
+    BIND(XK_d,         ShiftMask,   CMD_TOGGLE_ROTATION_IND) \
     BIND(XK_p,         ShiftMask,   CMD_TOGGLE_FULLPATH)     \
     BIND(XK_q,         0,           CMD_QUIT)                \
     BIND(XK_Escape,    0,           CMD_QUIT)
