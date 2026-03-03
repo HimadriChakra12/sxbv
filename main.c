@@ -122,15 +122,19 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 }
                 return;
             case CMD_THUMB_OPEN: {
-                /* Enter in thumb mode = open selected file */
                 if (v->file_count == 0) return;
                 ThumbEntry *e = &v->files[v->thumb_sel];
+                /* strdup path BEFORE thumb_free destroys it */
+                char *newpath = strdup(e->path);
                 if (v->doc) { fz_drop_document(v->ctx, v->doc); v->doc = NULL; }
                 if (v->pix) { fz_drop_pixmap(v->ctx, v->pix);  v->pix = NULL; }
-                fz_try(v->ctx) { v->doc = fz_open_document(v->ctx, e->path); }
+                fz_try(v->ctx) { v->doc = fz_open_document(v->ctx, newpath); }
                 fz_catch(v->ctx) { v->doc = NULL; }
-                if (!v->doc) return;
-                v->filename   = e->path;
+                if (!v->doc) { free(newpath); return; }
+                /* free previous owned filename if any */
+                if (v->filename_owned) free((char*)v->filename);
+                v->filename       = newpath;
+                v->filename_owned = 1;
                 v->page_count = fz_count_pages(v->ctx, v->doc);
                 v->page       = 0;
                 thumb_free(v);
@@ -412,7 +416,8 @@ int main(int argc, char **argv)
         }
     }
     if (i >= argc) { usage(argv[0]); return 1; }
-v.filename = expand_path(argv[i]);
+    v.filename       = expand_path(argv[i]);
+    v.filename_owned = 0;
 
     /* MuPDF context only -- no doc open yet */
     v.ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
@@ -500,6 +505,7 @@ v.filename = expand_path(argv[i]);
         }
     }
 quit:
+    if (v.filename_owned) free((char*)v.filename);
     if (v.pix) fz_drop_pixmap(v.ctx, v.pix);
     if (v.doc) fz_drop_document(v.ctx, v.doc);
     if (v.ctx) fz_drop_context(v.ctx);

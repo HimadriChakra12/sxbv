@@ -136,6 +136,7 @@ typedef struct {
     int           thumb_w;
     int           thumb_h;
     char         *thumb_dir;    /* directory being browsed */
+    int          filename_owned; /* 1 if filename was strdup'd and must be freed */
 
     /* numeric prefix */
     int          num_buf;
