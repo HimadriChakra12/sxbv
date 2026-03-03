@@ -92,6 +92,9 @@ static void run_command(Viewer *v, Command cmd, int cnt)
     int sp = (int)(v->win_h * SCROLL_PAGE_FRAC);
 
     switch (cmd) {
+        case CMD_TOGGLE_FULLPATH:
+            v->show_fullpath = !v->show_fullpath;
+            win_draw(v); break;
         case CMD_TOGGLE_BAR:
             v->bar_visible = !v->bar_visible;
             render_page(v); win_draw(v); break;
@@ -310,6 +313,7 @@ int main(int argc, char **argv)
     if (!win_init(&v)) return 1;
     v.bar_visible              = showbar;
     v.show_filename            = show_filename;
+    v.show_fullpath            = show_fullpath;
     v.show_pagelabel           = show_pagelabel;
     v.show_zoom                = show_zoom;
     v.show_fitmode             = show_fitmode;

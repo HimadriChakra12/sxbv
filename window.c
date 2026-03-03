@@ -28,8 +28,8 @@ static void load_color(Viewer *v, SpdfColor *c, const char *spec)
 
 static void load_colors(Viewer *v)
 {
-    load_color(v, &v->c_bg,     bgcolor);
-    load_color(v, &v->c_fg,     fgcolor);
+    load_color(v, &v->c_bg,     bgcolor);    /* bar background */
+    load_color(v, &v->c_fg,     fgcolor);    /* text + separator */
     load_color(v, &v->c_mark,   hitcolor);
     load_color(v, &v->c_sel,    hitselcolor);
     load_color(v, &v->c_pagebg, pagebg);
@@ -73,14 +73,23 @@ static void draw_bar(Viewer *v)
     int bx = 0;
     int by = topbar ? 0 : v->win_h - v->bar_h;
 
-    /* Background */
+    /* Background -- bgcolor */
     XSetForeground(v->dpy, v->gc, v->c_bg.pixel);
     XFillRectangle(v->dpy, v->win, v->gc, bx, by, v->win_w, v->bar_h);
 
-    /* Separator line */
+    /* Separator line -- fgcolor */
     XSetForeground(v->dpy, v->gc, v->c_fg.pixel);
     int ly = topbar ? by + v->bar_h - 1 : by;
     XDrawLine(v->dpy, v->win, v->gc, 0, ly, v->win_w, ly);
+
+    /* Resolve display name: basename or full path */
+    const char *dispname;
+    if (v->show_fullpath) {
+        dispname = v->filename;
+    } else {
+        const char *slash = strrchr(v->filename, '/');
+        dispname = slash ? slash + 1 : v->filename;
+    }
 
     /* Build left string */
     char left[512] = {0};
@@ -89,16 +98,16 @@ static void draw_bar(Viewer *v)
     } else if (v->hit_count > 0) {
         snprintf(left, sizeof left, "match %d/%d  %s",
                  v->hit + 1, v->hit_count,
-                 v->show_filename ? v->filename : "");
+                 v->show_filename ? dispname : "");
     } else if (v->show_filename) {
-        snprintf(left, sizeof left, "%s", v->filename);
+        snprintf(left, sizeof left, "%s", dispname);
     }
 
-    /* Build right string conditionally */
+    /* Build right string */
     char right[256] = {0};
     char tmp[64];
 
-if (v->show_pagelabel) {
+    if (v->show_pagelabel) {
         char label[32] = {0};
         fz_page *pg = fz_load_page(v->ctx, v->doc, v->page);
         const char *lb = fz_page_label(v->ctx, pg, label, sizeof label);
@@ -136,23 +145,23 @@ if (v->show_pagelabel) {
     if (v->show_fullscreen_indicator && v->fullscreen)
         strcat(right, "[FS]");
 
-    /* Baseline: center text vertically in bar */
+    /* Baseline */
     int baseline = by + (v->bar_h + v->font->ascent - v->font->descent) / 2;
 
-    /* Left text in fgcolor */
+    /* Left text -- fgcolor */
     XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
         4, baseline,
         (const FcChar8*)left, strlen(left));
 
-    /* Right text, right-aligned, in selcolor */
+    /* Right text -- selcolor, right-aligned */
     XGlyphInfo ext;
     XftTextExtentsUtf8(v->dpy, v->font,
         (const FcChar8*)right, strlen(right), &ext);
     int rx = v->win_w - ext.width - 6;
     if (rx > 4)
-        XftDrawStringUtf8(v->xftdraw, &v->c_sel.xft, v->font,
-            rx, baseline,
-            (const FcChar8*)right, strlen(right));
+        XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
+                rx, baseline,
+                (const FcChar8*)right, strlen(right));
 
     /* Cursor in search mode */
     if (v->search_mode) {

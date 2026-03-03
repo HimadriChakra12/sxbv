@@ -17,6 +17,7 @@ typedef enum {
     CMD_TOGGLE_ZOOM,
     CMD_TOGGLE_FITMODE,
     CMD_TOGGLE_ROTATION_IND,
+    CMD_TOGGLE_FULLPATH,
     CMD_NONE,
     CMD_SCROLL_DOWN, CMD_SCROLL_UP,
     CMD_SCROLL_LEFT, CMD_SCROLL_RIGHT,
@@ -105,6 +106,7 @@ typedef struct {
     int          show_fitmode;
     int          show_rotation;
     int          show_fullscreen_indicator;
+    int          show_fullpath;
 } Viewer;
 
 /* image.c */

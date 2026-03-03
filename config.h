@@ -4,8 +4,8 @@
 static const int  topbar    = 0;
 
 /* Colors (any valid X11 color string: "#rrggbb", "rgb:rr/gg/bb", named) */
-static const char bgcolor[]   = "#1d2021"; /* dark0_hard        */
-static const char fgcolor[]   = "#7daea3"; /* aqua               */
+static const char bgcolor[]   = "#7daea3"; /* this becomes the bar color */
+static const char fgcolor[]   = "#1d2021"; /* this becomes the text color */
 static const char markcolor[] = "#fe8019"; /* bright orange      */
 static const char selcolor[]  = "#fbf1c7"; /* light0             */
 
@@ -25,11 +25,12 @@ static const char hitselcolor[] = "#fe8019"; /* orange  */
 
 static const int showbar                   = 0;
 static const int show_filename             = 1;
+static const int show_fullpath             = 0;
 static const int show_pagelabel            = 1;
-static const int show_zoom                 = 1;
+static const int show_zoom                 = 0;
 static const int show_fitmode              = 1;
 static const int show_rotation             = 1;
-static const int show_fullscreen_indicator = 0;
+static const int show_fullscreen_indicator = 1;
 
 /* Default zoom fit mode: FIT_PAGE, FIT_WIDTH, FIT_HEIGHT, FIT_NONE */
 #define DEFAULT_FIT       FIT_PAGE
