@@ -9,7 +9,7 @@
 
 static const char *thumb_exts[] = {
     ".pdf", ".epub", ".cbz", ".cbr", ".xps", ".fb2",
-    ".mobi", ".svg", ".png", ".jpg", ".jpeg",
+    ".mobi",
     NULL
 };
 
