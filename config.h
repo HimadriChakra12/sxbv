@@ -71,7 +71,7 @@ static const int show_fullscreen_indicator = 0;
     BIND(XK_Right,     0,           CMD_SCROLL_RIGHT)        \
     BIND(XK_g,         0,           CMD_FIRST_PAGE)          \
     BIND(XK_Home,      0,           CMD_FIRST_PAGE)          \
-    BIND(XK_G,         ShiftMask,   CMD_LAST_PAGE)           \
+    BIND(XK_g,         ShiftMask,   CMD_LAST_PAGE)           \
     BIND(XK_End,       0,           CMD_LAST_PAGE)           \
     BIND(XK_plus,      0,           CMD_ZOOM_IN)             \
     BIND(XK_equal,     0,           CMD_ZOOM_IN)             \
