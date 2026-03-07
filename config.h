@@ -82,7 +82,7 @@ static const int show_fullscreen_indicator = 0;
     BIND(XK_f,         0,           CMD_FIT_PAGE)            \
     BIND(XK_r,         0,           CMD_ROTATE_CW)           \
     BIND(XK_r,         ShiftMask,   CMD_ROTATE_CCW)          \
-    BIND(XK_F,         ShiftMask,   CMD_FULLSCREEN)          \
+    BIND(XK_f,         ShiftMask,   CMD_FULLSCREEN)          \
     BIND(XK_slash,     0,           CMD_SEARCH_START)        \
     BIND(XK_n,         0,           CMD_SEARCH_NEXT)         \
     BIND(XK_n,         ShiftMask,   CMD_SEARCH_PREV)         \
