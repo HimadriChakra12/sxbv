@@ -6,7 +6,7 @@
 #include <X11/keysym.h>
 #include <X11/Xatom.h>
 #include <X11/Xft/Xft.h>
-#include "mupdf/fitz.h"
+#include "fitz.h"
 #include "config.h"
 
 typedef enum { FIT_NONE, FIT_WIDTH, FIT_HEIGHT, FIT_PAGE } FitMode;
