@@ -126,16 +126,15 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 ThumbEntry *e = &v->files[v->thumb_sel];
                 /* strdup path BEFORE thumb_free destroys it */
                 char *newpath = strdup(e->path);
-                if (v->doc) { fz_drop_document(v->ctx, v->doc); v->doc = NULL; }
-                if (v->pix) { fz_drop_pixmap(v->ctx, v->pix);  v->pix = NULL; }
-                fz_try(v->ctx) { v->doc = fz_open_document(v->ctx, newpath); }
-                fz_catch(v->ctx) { v->doc = NULL; }
+                if (v->doc) { pdf_close(v->doc); v->doc = NULL; }
+                if (v->pix) { pdf_pix_free(v->pix); v->pix = NULL; }
+                v->doc = pdf_open(newpath);
                 if (!v->doc) { free(newpath); return; }
                 /* free previous owned filename if any */
                 if (v->filename_owned) free((char*)v->filename);
                 v->filename       = newpath;
                 v->filename_owned = 1;
-                v->page_count = fz_count_pages(v->ctx, v->doc);
+                v->page_count = pdf_page_count(v->doc);
                 v->page       = 0;
                 thumb_free(v);
                 v->mode = MODE_NORMAL;
@@ -419,21 +418,17 @@ int main(int argc, char **argv)
     v.filename       = expand_path(argv[i]);
     v.filename_owned = 0;
 
-    /* MuPDF context only -- no doc open yet */
-    v.ctx = fz_new_context(NULL, NULL, FZ_STORE_DEFAULT);
-    if (!v.ctx) { fprintf(stderr, "sxbv: cannot create mupdf context\n"); return 1; }
-    fz_register_document_handlers(v.ctx);
-    fz_set_warning_callback(v.ctx, NULL, NULL);
+    /* Poppler one-time init */
+    if (pdf_init() != 0) { fprintf(stderr, "sxbv: cannot init pdf backend\n"); return 1; }
 
-    /* MUST come before any fz_open_document call */
+    /* MUST come before any pdf_open call */
     struct stat st;
     int is_dir = (stat(v.filename, &st) == 0 && S_ISDIR(st.st_mode));
 
     if (!is_dir) {
-        fz_try(v.ctx) { v.doc = fz_open_document(v.ctx, v.filename); }
-        fz_catch(v.ctx) { v.doc = NULL; }
+        v.doc = pdf_open(v.filename);
         if (!v.doc) { fprintf(stderr, "sxbv: cannot open: %s\n", v.filename); return 1; }
-        v.page_count = fz_count_pages(v.ctx, v.doc);
+        v.page_count = pdf_page_count(v.doc);
         if (v.page_count <= 0) { fprintf(stderr, "sxbv: no pages\n"); return 1; }
         v.page = (opt_page >= 0 && opt_page < v.page_count) ? opt_page : 0;
     }
@@ -506,9 +501,9 @@ int main(int argc, char **argv)
     }
 quit:
     if (v.filename_owned) free((char*)v.filename);
-    if (v.pix) fz_drop_pixmap(v.ctx, v.pix);
-    if (v.doc) fz_drop_document(v.ctx, v.doc);
-    if (v.ctx) fz_drop_context(v.ctx);
+    if (v.pix) pdf_pix_free(v.pix);
+    if (v.doc) pdf_close(v.doc);
+    pdf_shutdown();
     XCloseDisplay(v.dpy);
     return 0;
 }

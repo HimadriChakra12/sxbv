@@ -1,36 +1,78 @@
-CC      = cc
-CFLAGS  = -std=gnu99 -Wall -Wextra -O2 -I./mupdf $(shell pkg-config --cflags xft fontconfig)
-LDFLAGS = -lX11 -lmupdf -lm $(shell pkg-config --libs xft fontconfig)
+PREFIX   ?= /usr/local
+BINDIR   ?= $(PREFIX)/bin
 
-PREFIX  = /usr/local
-BINDIR  = $(PREFIX)/bin
-APPDIR  = $(PREFIX)/share/applications
+CC   = clang
+CXX  = clang++
+AR   = ar
 
-SRC = main.c image.c window.c search.c thumb.c
-OBJ = $(SRC:.c=.o)
+POPPLER  = include/poppler-src
+POPINC   = -I$(POPPLER) -I$(POPPLER)/poppler -I$(POPPLER)/goo \
+           -I$(POPPLER)/fofi -I$(POPPLER)/splash
+
+POPCXX   = $(wildcard $(POPPLER)/poppler/*.cc) \
+           $(wildcard $(POPPLER)/goo/*.cc)     \
+           $(wildcard $(POPPLER)/fofi/*.cc)    \
+           $(wildcard $(POPPLER)/splash/*.cc)
+
+POPC     = $(wildcard $(POPPLER)/poppler/*.pregenerated.c)
+
+POPOBJ   = $(POPCXX:%.cc=%.o) $(POPC:%.pregenerated.c=%.pregenerated.o)
+POPLIB   = include/libpoppler-core.a
+
+CODECDEPS = $(shell pkg-config --cflags freetype2 fontconfig libopenjp2)
+
+SRCS_C   = src/image.c src/search.c src/thumb.c src/window.c main.c
+SRCS_CXX = src/pdfshim.cc
+
+OBJS     = $(SRCS_C:%.c=%.o) $(SRCS_CXX:%.cc=%.o)
+
+SXBV_CFLAGS  = -std=c99 -D_POSIX_C_SOURCE=200809L -Wall -Wextra \
+               -O2 -I. -Isrc $(POPINC) $(CODECDEPS) \
+               $(shell pkg-config --cflags xft)
+
+SXBV_CXXFLAGS = -std=c++23 -Wall -Wextra -O2 \
+                -I. -Isrc $(POPINC) $(CODECDEPS)
+
+POP_CFLAGS   = -std=c99  -O2 -w $(POPINC) $(CODECDEPS)
+POP_CXXFLAGS = -std=c++23 -O2 -w $(POPINC) $(CODECDEPS)
+
+LIBS  = $(POPLIB) \
+        $(shell pkg-config --libs freetype2 fontconfig libopenjp2 xft) \
+        -lX11 -llcms2 -ljpeg -lz -lstdc++ -lm -lpthread
+
+.PHONY: all clean install uninstall
 
 all: sxbv
 
-sxbv: $(OBJ)
-	$(CC) $(OBJ) -o $@ $(LDFLAGS)
+$(POPLIB): $(POPOBJ)
+	$(AR) rcs $@ $^
 
-$(OBJ): sxbv.h config.h
+$(POPPLER)/%.o: $(POPPLER)/%.cc
+	$(CXX) $(POP_CXXFLAGS) -c $< -o $@
+
+$(POPPLER)/poppler/%.pregenerated.o: $(POPPLER)/poppler/%.pregenerated.c
+	$(CC) $(POP_CFLAGS) -c $< -o $@
+
+src/pdfshim.o: src/pdfshim.cc src/pdfshim.h
+	$(CXX) $(SXBV_CXXFLAGS) -c $< -o $@
+
+src/%.o: src/%.c src/sxbv.h src/pdfshim.h config.h
+	$(CC) $(SXBV_CFLAGS) -c $< -o $@
+
+main.o: main.c src/sxbv.h src/pdfshim.h config.h
+	$(CC) $(SXBV_CFLAGS) -c $< -o $@
+
+sxbv: $(OBJS) $(POPLIB)
+	$(CXX) $(OBJS) $(LIBS) -o $@
+
+clean:
+	rm -f sxbv main.o src/*.o
+	rm -f $(POPOBJ) $(POPLIB)
 
 install: sxbv
-	install -Dm755 sxbv $(DESTDIR)$(BINDIR)/sxbv
-	install -Dm644 sxbv.desktop $(DESTDIR)$(APPDIR)/sxbv.desktop
-	@if command -v update-desktop-database >/dev/null 2>&1; then \
-		update-desktop-database $(DESTDIR)$(APPDIR); \
-	fi
+	install -Dm755 sxbv  $(DESTDIR)$(BINDIR)/sxbv
+	install -Dm644 sxbv.desktop $(DESTDIR)$(PREFIX)/share/applications/sxbv.desktop
 
 uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/sxbv
-	rm -f $(DESTDIR)$(APPDIR)/sxbv.desktop
-	@if command -v update-desktop-database >/dev/null 2>&1; then \
-		update-desktop-database $(DESTDIR)$(APPDIR); \
-	fi
-
-clean:
-	rm -f sxbv $(OBJ)
-
-.PHONY: all clean install uninstall
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/sxbv.desktop

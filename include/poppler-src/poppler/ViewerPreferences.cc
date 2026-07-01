@@ -1,0 +1,115 @@
+//========================================================================
+//
+// ViewerPreferences.cc
+//
+// This file is licensed under the GPLv2 or later
+//
+// Copyright 2011 Pino Toscano <pino@kde.org>
+// Copyright 2017, 2020, 2022, 2025 Albert Astals Cid <aacid@kde.org>
+// Copyright 2019 Marek Kasik <mkasik@redhat.com>
+// Copyright 2026 Stefan Brüns <stefan.bruens@rwth-aachen.de>
+//
+//========================================================================
+
+#include <config.h>
+
+#include "ViewerPreferences.h"
+
+#include "Object.h"
+#include "Dict.h"
+
+ViewerPreferences::ViewerPreferences(const Dict &prefDict)
+{
+    hideToolbar = prefDict.lookup("HideToolbar").getBoolWithDefaultValue(false);
+
+    hideMenubar = prefDict.lookup("HideMenubar").getBoolWithDefaultValue(false);
+
+    hideWindowUI = prefDict.lookup("HideWindowUI").getBoolWithDefaultValue(false);
+
+    fitWindow = prefDict.lookup("FitWindow").getBoolWithDefaultValue(false);
+
+    centerWindow = prefDict.lookup("CenterWindow").getBoolWithDefaultValue(false);
+
+    displayDocTitle = prefDict.lookup("DisplayDocTitle").getBoolWithDefaultValue(false);
+
+    Object obj = prefDict.lookup("NonFullScreenPageMode");
+    if (obj.isName()) {
+        const std::string &mode = obj.getNameString();
+        if (mode == "UseNone") {
+            nonFullScreenPageMode = nfpmUseNone;
+        } else if (mode == "UseOutlines") {
+            nonFullScreenPageMode = nfpmUseOutlines;
+        } else if (mode == "UseThumbs") {
+            nonFullScreenPageMode = nfpmUseThumbs;
+        } else if (mode == "UseOC") {
+            nonFullScreenPageMode = nfpmUseOC;
+        }
+    }
+
+    obj = prefDict.lookup("Direction");
+    if (obj.isName()) {
+        const std::string &dir = obj.getNameString();
+        if (dir == "L2R") {
+            direction = directionL2R;
+        } else if (dir == "R2L") {
+            direction = directionR2L;
+        }
+    }
+
+    obj = prefDict.lookup("PrintScaling");
+    if (obj.isName()) {
+        const std::string &ps = obj.getNameString();
+        if (ps == "None") {
+            printScaling = printScalingNone;
+        } else if (ps == "AppDefault") {
+            printScaling = printScalingAppDefault;
+        }
+    }
+
+    obj = prefDict.lookup("Duplex");
+    if (obj.isName()) {
+        const std::string &d = obj.getNameString();
+        if (d == "Simplex") {
+            duplex = duplexSimplex;
+        } else if (d == "DuplexFlipShortEdge") {
+            duplex = duplexDuplexFlipShortEdge;
+        } else if (d == "DuplexFlipLongEdge") {
+            duplex = duplexDuplexFlipLongEdge;
+        }
+    }
+
+    pickTrayByPDFSize = prefDict.lookup("PickTrayByPDFSize").getBoolWithDefaultValue(false);
+
+    obj = prefDict.lookup("NumCopies");
+    if (obj.isInt()) {
+        numCopies = obj.getInt();
+        if (numCopies < 2) {
+            numCopies = 1;
+        }
+    }
+
+    obj = prefDict.lookup("PrintPageRange");
+    if (obj.isArray()) {
+        Array *range = obj.getArray();
+        int length = range->getLength();
+        int pageNumber1, pageNumber2;
+
+        if (length % 2 == 1) {
+            length--;
+        }
+
+        for (int i = 0; i < length; i += 2) {
+            Object obj2 = range->get(i);
+            Object obj3 = range->get(i + 1);
+
+            if (obj2.isInt() && (pageNumber1 = obj2.getInt()) >= 1 && obj3.isInt() && (pageNumber2 = obj3.getInt()) >= 1 && pageNumber1 < pageNumber2) {
+                printPageRange.emplace_back(pageNumber1, pageNumber2);
+            } else {
+                printPageRange.clear();
+                break;
+            }
+        }
+    }
+}
+
+ViewerPreferences::~ViewerPreferences() = default;
