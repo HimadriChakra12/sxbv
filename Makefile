@@ -8,27 +8,31 @@ ORANGE = \033[38;5;208m
 BLUE    = \033[1;34m
 RESET = \033[0m
 
+pretty = $(patsubst include/poppler-src%,POP%,$1)
+
 define compile_c
 	@t=$$(date +%s%N); \
-	printf "$(GREEN)$(CC)$(RESET)  $(BOLD)$<$(RESET)\t $@\t"; \
+	printf "$(GREEN)%-8s$(RESET) $(BOLD)%-55s$(RESET) %-55s" \
+		"$(CC)" "$(call pretty,$<)" "$(call pretty,$@)"; \
 	$(CC) $(1) -c $< -o $@ ; \
 	rc=$$?; \
 	ms=$$(( ($$(date +%s%N) - t) / 1000000 )); \
-	[ $$rc -eq 0 ] && printf "$(CYAN)%dms$(RESET)\n" $$ms || exit $$rc
+	[ $$rc -eq 0 ] && printf "\t$(CYAN)%dms$(RESET)\n" $$ms || exit $$rc
 endef
 
 define compile_cxx
 	@t=$$(date +%s%N); \
-	printf "$(BLUE)$(CXX)$(RESET)  $(BOLD)$<$(RESET)\t $@\t"; \
+	printf "$(BLUE)%-8s$(RESET) $(BOLD)%-55s$(RESET) %-55s" \
+		"$(CXX)" "$(call pretty,$<)" "$(call pretty,$@)"; \
 	$(CXX) $(1) -c $< -o $@ ; \
 	rc=$$?; \
 	ms=$$(( ($$(date +%s%N) - t) / 1000000 )); \
-	[ $$rc -eq 0 ] && printf "$(CYAN)%dms$(RESET)\n" $$ms || exit $$rc
+	[ $$rc -eq 0 ] && printf "\t$(CYAN)%dms$(RESET)\n" $$ms || exit $$rc
 endef
 
 define link_bin
 	@t=$$(date +%s%N); \
-	printf "$(GREEN)link$(RESET)   $(BOLD)$@$(RESET)\n"; \
+	printf "$(GREEN)link$(RESET)   $(BOLD)$@$(RESET) %-111s"; \
 	$(CXX) $(LDFLAGS) $(OBJS) $(LIBS) -o $@ ; \
 	rc=$$?; \
 	ms=$$(( ($$(date +%s%N) - t) / 1000000 )); \

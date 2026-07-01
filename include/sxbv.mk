@@ -4,6 +4,8 @@ BINDIR   ?= $(PREFIX)/bin
 CC   = clang
 CXX  = clang++
 AR   = ar
+COLOR = # -fcolor-diagnostics 
+FLT   = # -flto=thin
 
 
 POPPLER  = include/poppler-src
@@ -30,22 +32,23 @@ OBJS     = $(SRCS_C:%.c=%.o) $(SRCS_CXX:%.cc=%.o)
 DEPS     = $(SRCS_C:%.c=%.d) $(SRCS_CXX:%.cc=%.d)
 
 SXBV_CFLAGS  = -std=c99 -D_POSIX_C_SOURCE=200809L \
-               -Wall -Wextra -O2 -march=native -flto=thin \
-               -fvisibility=hidden -fcolor-diagnostics \
+               -Wall -Wextra -O2 -march=native  \
+               -fvisibility=hidden \
+			   $(COLOR) \
                -I. -Isrc $(POPINC) $(CODECDEPS) \
                $(shell pkg-config --cflags xft) \
                -MMD -MP
 
 SXBV_CXXFLAGS = -std=c++23 \
-                -Wall -Wextra -O2 -march=native -flto=thin \
-                -fvisibility=hidden -fcolor-diagnostics \
+                -Wall -Wextra -O2 -march=native $(FLT) \
+                -fvisibility=hidden $(COLOR) \
                 -I. -Isrc $(POPINC) $(CODECDEPS) \
                 -MMD -MP
 
-POP_CFLAGS   = -std=c99  -O2 -march=native -w -fcolor-diagnostics $(POPINC) $(CODECDEPS) -MMD -MP
-POP_CXXFLAGS = -std=c++23 -O2 -march=native -w -fcolor-diagnostics $(POPINC) $(CODECDEPS) -MMD -MP
+POP_CFLAGS   = -std=c99  -O2 -march=native -w $(COLOR) $(POPINC) $(CODECDEPS) -MMD -MP
+POP_CXXFLAGS = -std=c++23 -O2 -march=native -w $(COLOR) $(POPINC) $(CODECDEPS) -MMD -MP
 
-LDFLAGS = -flto=thin
+LDFLAGS = $(FLT)
 
 LIBS  = $(POPLIB) \
         $(shell pkg-config --libs freetype2 fontconfig libopenjp2 xft) \
