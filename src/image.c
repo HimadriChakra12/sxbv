@@ -2,14 +2,6 @@
 #include <math.h>
 #include "sxbv.h"
 
-/*
- * fit_zoom() -- compute the zoom value that fits the page into the window
- * for the current fit mode and rotation.
- *
- * bounds is the page's natural size in PDF points (72 pt = 1 inch).
- * After applying rotation, we know which dimension is "width" vs "height"
- * on screen, then compute the zoom that maps each to the window dimension.
- */
 static float fit_zoom(Viewer *v, PdfRect bounds)
 {
     float pw = bounds.x1 - bounds.x0;
@@ -17,7 +9,6 @@ static float fit_zoom(Viewer *v, PdfRect bounds)
     if (pw <= 0) pw = 1;
     if (ph <= 0) ph = 1;
 
-    /* 90/270 degree rotation swaps width and height on screen. */
     int r = ((v->rotation % 360) + 360) % 360;
     if (r == 90 || r == 270) {
         float tmp = pw; pw = ph; ph = tmp;
@@ -36,13 +27,11 @@ static float fit_zoom(Viewer *v, PdfRect bounds)
 
 void render_page(Viewer *v)
 {
-    /* Drop any previous pixmap. */
     if (v->pix) {
         pdf_pix_free(v->pix);
         v->pix = NULL;
     }
 
-    /* Query page dimensions before rendering so fit-mode can set zoom. */
     PdfRect bounds = pdf_page_bounds(v->doc, v->page);
 
     if (v->fit != FIT_NONE) {
@@ -61,13 +50,6 @@ void render_page(Viewer *v)
     win_update_title(v);
 }
 
-/*
- * to_bgrx() -- convert the current page's RGB8 pixmap to BGRx (4 bytes/pixel)
- * as required by X11's XPutImage on typical little-endian 32-bpp visuals.
- *
- * Splash uses a per-row stride (padded to 4 bytes) that may differ from
- * width*3; we must use pdf_pix_stride() to index source rows correctly.
- */
 unsigned char *to_bgrx(Viewer *v)
 {
     if (!v->pix) return NULL;
@@ -77,15 +59,16 @@ unsigned char *to_bgrx(Viewer *v)
     unsigned char *src = pdf_pix_samples(v->pix);
     unsigned char *dst = malloc((size_t)w * (size_t)h * 4);
     if (!dst) return NULL;
-
     for (int y = 0; y < h; y++) {
-        unsigned char *row = src + y * stride;
-        unsigned char *out = dst + y * w * 4;
+        const unsigned char *row = src + (size_t)y * stride;
+        unsigned int        *out = (unsigned int *)(dst + (size_t)y * w * 4);
         for (int x = 0; x < w; x++) {
-            out[x*4+0] = row[x*3+2]; /* B */
-            out[x*4+1] = row[x*3+1]; /* G */
-            out[x*4+2] = row[x*3+0]; /* R */
-            out[x*4+3] = 0;           /* x (padding) */
+            unsigned int px;
+            __builtin_memcpy(&px, row + x * 3, 4);
+            unsigned int r = (px      ) & 0xffu;
+            unsigned int g = (px >>  8) & 0xffu;
+            unsigned int b = (px >> 16) & 0xffu;
+            out[x] = (r << 16) | (g << 8) | b;
         }
     }
     return dst;
