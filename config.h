@@ -1,37 +1,27 @@
 /* sxbv config -- edit this file to configure sxbv */
 
 /* Bar position: 0 = bottom, 1 = top */
-static const int  topbar    = 0;
+static const int  topbar        = 0;
 
-/* Colors (any valid X11 color string: "#rrggbb", "rgb:rr/gg/bb", named) */
-static const char bgcolor[]   = "#7daea3"; /* this becomes the bar color */
-static const char fgcolor[]   = "#1d2021"; /* this becomes the text color */
-static const char markcolor[] = "#fe8019"; /* bright orange      */
-static const char selcolor[]  = "#fbf1c7"; /* light0             */
+static const char bgcolor[]     = "#7daea3";
+static const char fgcolor[]     = "#1d2021";
+static const char markcolor[]   = "#fe8019";
+static const char selcolor[]    = "#fbf1c7";
 
-/* Xft font string -- fontconfig format, comma-separated fallbacks */
 static const char statusfont[] =
     "JetBrains Mono Medium:pixelsize=15:antialias=true:autohint=true,"
     "monospace:pixelsize=15";
 
-/* Page background color */
 static const char pagebg[] = "#1d2021";
-/* Start in fullscreen: 1 = yes, 0 = no */
 static const int startfullscreen = 1;
 
-/* Search highlight colors */
 static const char hitcolor[]    = "#fabd2f"; /* yellow  */
 static const char hitselcolor[] = "#fe8019"; /* orange  */
 
-/* File browser thumbnail config */
 #define THUMB_WIDTH      180
 #define THUMB_PADDING    50
 #define THUMB_SELBORDER  2
 #define THUMB_LABEL_H    20   /* height reserved below thumb for filename */
-
-
-/* Toggle thumbnail mode */
-/* Enter in thumb mode opens page, t toggles thumb mode */
 
 static const int showbar_thumb             = 1;
 static const int showbar_normal            = 0;
@@ -43,7 +33,6 @@ static const int show_fitmode              = 0;
 static const int show_rotation             = 0;
 static const int show_fullscreen_indicator = 0;
 
-/* Default zoom fit mode: FIT_PAGE, FIT_WIDTH, FIT_HEIGHT, FIT_NONE */
 #define DEFAULT_FIT       FIT_PAGE
 #define DEFAULT_ZOOM      1.0f
 #define ZOOM_STEP         0.1f
@@ -55,7 +44,6 @@ static const int show_fullscreen_indicator = 0;
 #define MAX_SEARCH        256
 #define WIN_SCREEN_FRAC   0.667f
 
-/* Keybindings */
 #define KEYBINDINGS \
     BIND(XK_j,         0,           CMD_SCROLL_DOWN)         \
     BIND(XK_Down,      0,           CMD_SCROLL_DOWN)         \
