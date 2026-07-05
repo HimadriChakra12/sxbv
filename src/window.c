@@ -105,7 +105,9 @@ static void draw_bar_to(Viewer *v, Drawable dst)
                      v->show_fullpath ? path : name);
         }
     } else {
-        if (v->search_mode) {
+        if (v->color_input_mode) {
+            snprintf(left, sizeof left, "Color: %s", v->color_input_buf);
+        } else if (v->search_mode) {
             snprintf(left, sizeof left, "/ %s", v->search_buf);
         } else if (v->hit_count > 0) {
             snprintf(left, sizeof left, "match %d/%d  %s",
@@ -166,6 +168,13 @@ static void draw_bar_to(Viewer *v, Drawable dst)
         }
         if (v->show_fullscreen_indicator && v->fullscreen)
             strcat(right, "[FS]");
+        if (v->annot_mode == ANNOT_PENCIL) {
+            snprintf(tmp, sizeof tmp, "[PENCIL %.0fpx]  ", v->pencil_thickness);
+            strcat(right, tmp);
+        } else if (v->annot_mode == ANNOT_HIGHLIGHT) {
+            snprintf(tmp, sizeof tmp, "[HIGHLIGHT %.0fpx]  ", v->highlight_thickness);
+            strcat(right, tmp);
+        }
     }
 
     /* Redirect Xft to dst */
@@ -187,11 +196,14 @@ static void draw_bar_to(Viewer *v, Drawable dst)
         XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
             rx, baseline, (const FcChar8*)right, strlen(right));
 
-    /* Cursor in search mode */
-    if (v->search_mode) {
+    /* Cursor in search / color-input mode */
+    if (v->search_mode || v->color_input_mode) {
         XGlyphInfo cext;
-        char cur[MAX_SEARCH + 4];
-        snprintf(cur, sizeof cur, "/ %s", v->search_buf);
+        char cur[sizeof v->color_input_buf + 16];
+        if (v->color_input_mode)
+            snprintf(cur, sizeof cur, "Color: %s", v->color_input_buf);
+        else
+            snprintf(cur, sizeof cur, "/ %s", v->search_buf);
         XftTextExtentsUtf8(v->dpy, v->font,
             (const FcChar8*)cur, strlen(cur), &cext);
         XSetForeground(v->dpy, v->gc, v->c_fg.pixel);
@@ -235,28 +247,26 @@ void win_draw(Viewer *v)
     XSetForeground(v->dpy, v->gc, v->c_pagebg.pixel);
     XFillRectangle(v->dpy, dst, v->gc, 0, page_y, v->win_w, page_h);
 
-    if (v->pix) {
-        unsigned char *bgrx = to_bgrx(v);
-        if (bgrx) {
-            XImage *img = XCreateImage(v->dpy, v->visual,
-                24, ZPixmap, 0, (char*)bgrx,
-                v->pix_w, v->pix_h, 32, 0);
-            if (img) {
-                int sx=0, sy=0;
-                int dx=v->scroll_x, dy=v->scroll_y + bar_off;
-                int dw=v->pix_w,    dh=v->pix_h;
-                if (dx < 0) { sx = -dx; dw += dx; dx = 0; }
-                if (dy < page_y) { sy = page_y - dy; dh -= sy; dy = page_y; }
-                if (dw > v->win_w - dx) dw = v->win_w - dx;
-                int bot = page_y + page_h;
-                if (dy + dh > bot) dh = bot - dy;
-                if (dw > 0 && dh > 0)
-                    XPutImage(v->dpy, dst, v->gc, img,
-                        sx, sy, dx, dy, dw, dh);
-                img->data = NULL;
-                XDestroyImage(img);
-            }
-            free(bgrx);
+    if (v->annot_bgrx) {
+        XImage *img = XCreateImage(v->dpy, v->visual,
+            24, ZPixmap, 0, (char*)v->annot_bgrx,
+            v->annot_bgrx_w, v->annot_bgrx_h, 32, 0);
+        if (img) {
+            int sx=0, sy=0;
+            int dx=v->scroll_x, dy=v->scroll_y + bar_off;
+            int dw=v->annot_bgrx_w, dh=v->annot_bgrx_h;
+            if (dx < 0) { sx = -dx; dw += dx; dx = 0; }
+            if (dy < page_y) { sy = page_y - dy; dh -= sy; dy = page_y; }
+            if (dw > v->win_w - dx) dw = v->win_w - dx;
+            int bot = page_y + page_h;
+            if (dy + dh > bot) dh = bot - dy;
+            if (dw > 0 && dh > 0)
+                XPutImage(v->dpy, dst, v->gc, img,
+                    sx, sy, dx, dy, dw, dh);
+            /* v->annot_bgrx is a persistent cache owned by annotate.c --
+             * do not free it here, only detach it from the XImage. */
+            img->data = NULL;
+            XDestroyImage(img);
         }
     }
 
@@ -329,6 +339,9 @@ void win_draw(Viewer *v)
 
     XCopyArea(v->dpy, dst, v->win, v->gc,
         0, 0, v->win_w, v->win_h, 0, 0);
+
+    annot_draw_cursor(v, v->win);
+
     XFlush(v->dpy);
 }
 
@@ -363,7 +376,8 @@ v->win = XCreateSimpleWindow(v->dpy, RootWindow(v->dpy, v->screen),
     XSetWMProtocols(v->dpy, v->win, &v->wm_delete, 1);
 
     XSelectInput(v->dpy, v->win,
-        ExposureMask | KeyPressMask | ButtonPressMask | StructureNotifyMask);
+        ExposureMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask |
+        PointerMotionMask | StructureNotifyMask);
     v->gc = DefaultGC(v->dpy, v->screen);
     XMapWindow(v->dpy, v->win);
 

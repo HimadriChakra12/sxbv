@@ -38,7 +38,7 @@ CODEC_LIBS   := $(shell pkg-config --libs   freetype2 fontconfig libopenjp2 xft)
 # same set as CODEC_CFLAGS minus xft, computed once (no second pkg-config call)
 CODECDEPS    := $(filter-out %/include/xft% -I/usr/include/X11%,$(CODEC_CFLAGS))
 
-SRCS_C   = src/image.c src/search.c src/thumb.c src/window.c main.c
+SRCS_C   = src/image.c src/search.c src/thumb.c src/window.c src/annotate.c main.c
 SRCS_CXX = src/pdfshim.cc
 OBJS     = $(SRCS_C:%.c=%.o) $(SRCS_CXX:%.cc=%.o)
 DEPS     = $(SRCS_C:%.c=%.d) $(SRCS_CXX:%.cc=%.d)

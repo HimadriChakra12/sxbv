@@ -46,6 +46,8 @@ void render_page(Viewer *v)
     v->pix_w = pdf_pix_width(v->pix);
     v->pix_h = pdf_pix_height(v->pix);
 
+    annot_rebuild(v);
+
     clamp_scroll(v);
     win_update_title(v);
 }

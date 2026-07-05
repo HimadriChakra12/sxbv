@@ -44,6 +44,35 @@ static const int show_fullscreen_indicator = 0;
 #define MAX_SEARCH        256
 #define WIN_SCREEN_FRAC   0.667f
 
+/* ---- Annotation tools: pencil (opaque) & highlighter (translucent) ---- */
+
+/* Cycle through this palette with '[' / ']'. Accepts any X11 color name
+ * or "#rrggbb" hex string. */
+static const char *annot_palette[] = {
+    "#ff0000", "#fabd2f", "#00c853", "#2196f3",
+    "#ffffff", "#000000", "#ff00ff", "#00e5ff",
+};
+#define ANNOT_PALETTE_LEN ((int)(sizeof(annot_palette) / sizeof(annot_palette[0])))
+
+/* Requirement: pencil defaults to red, highlighter defaults to yellow. */
+static const char pencil_default_color[]    = "#ff0000";
+static const char highlight_default_color[] = "#fabd2f";
+
+/* Thickness is stored normalised to page width, so strokes stay visually
+ * consistent across zoom levels. These defaults are in pixels at the
+ * zoom level active when a document is first opened. */
+#define PENCIL_DEFAULT_THICKNESS     3.0f
+#define HIGHLIGHT_DEFAULT_THICKNESS 18.0f
+#define ANNOT_THICK_MIN    1.0f
+#define ANNOT_THICK_MAX   80.0f
+#define ANNOT_THICK_STEP   1.0f
+
+/* Highlighter translucency, 0 (invisible) - 255 (fully opaque). */
+#define HIGHLIGHT_ALPHA 90
+
+/* Outline color of the thickness-preview ring around the cursor. */
+#define ANNOT_CURSOR_RING_COLOR "#ffffff"
+
 #define KEYBINDINGS \
     BIND(XK_j,         0,           CMD_SCROLL_DOWN)         \
     BIND(XK_Down,      0,           CMD_SCROLL_DOWN)         \
@@ -83,4 +112,13 @@ static const int show_fullscreen_indicator = 0;
     BIND(XK_d,         ShiftMask,   CMD_TOGGLE_ROTATION_IND) \
     BIND(XK_p,         ShiftMask,   CMD_TOGGLE_FULLPATH)     \
     BIND(XK_q,         0,           CMD_QUIT)                \
-    BIND(XK_Escape,    0,           CMD_QUIT)
+    BIND(XK_Escape,    0,           CMD_QUIT)                \
+    /* -- annotation tools -- */                             \
+    BIND(XK_h,         ControlMask, CMD_TOGGLE_HIGHLIGHT)    \
+    BIND(XK_p,         ControlMask, CMD_TOGGLE_PENCIL)       \
+    BIND(XK_bracketleft,  0,        CMD_ANNOT_COLOR_PREV)    \
+    BIND(XK_bracketright, 0,        CMD_ANNOT_COLOR_NEXT)    \
+    BIND(XK_comma,     ShiftMask,   CMD_ANNOT_THICK_DEC)     \
+    BIND(XK_period,    ShiftMask,   CMD_ANNOT_THICK_INC)     \
+    BIND(XK_c,         ShiftMask,   CMD_ANNOT_COLOR_INPUT)   \
+    BIND(XK_u,         ControlMask, CMD_ANNOT_UNDO)

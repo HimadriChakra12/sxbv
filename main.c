@@ -65,8 +65,9 @@ static Command lookup_key(KeySym ks, unsigned int mod)
     /* Strip Lock keys from modifier */
     mod &= ~(LockMask | Mod2Mask | Mod3Mask | Mod4Mask | Mod5Mask);
     for (int i = 0; i < n_keybinds; i++)
-        if (keybinds[i].ks == ks && keybinds[i].mod == mod)
+        if (keybinds[i].ks == ks && keybinds[i].mod == mod) {
             return keybinds[i].cmd;
+        }
     return CMD_NONE;
 }
 
@@ -136,6 +137,8 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 v->filename_owned = 1;
                 v->page_count = pdf_page_count(v->doc);
                 v->page       = 0;
+                v->annot_mode = ANNOT_NONE;
+                annot_init(v);
                 thumb_free(v);
                 v->mode = MODE_NORMAL;
                 v->bar_visible = showbar_normal;
@@ -303,6 +306,14 @@ static void run_command(Viewer *v, Command cmd, int cnt)
             if (v->hit_count > 0) v->hit = (v->hit - 1 + v->hit_count) % v->hit_count;
             else search_do(v, -1);
             break;
+        case CMD_TOGGLE_HIGHLIGHT: annot_toggle(v, ANNOT_HIGHLIGHT); break;
+        case CMD_TOGGLE_PENCIL:    annot_toggle(v, ANNOT_PENCIL);    break;
+        case CMD_ANNOT_COLOR_PREV: annot_color_cycle(v, -1); break;
+        case CMD_ANNOT_COLOR_NEXT: annot_color_cycle(v,  1); break;
+        case CMD_ANNOT_THICK_DEC:  annot_thickness_adjust(v, -ANNOT_THICK_STEP * cnt); break;
+        case CMD_ANNOT_THICK_INC:  annot_thickness_adjust(v,  ANNOT_THICK_STEP * cnt); break;
+        case CMD_ANNOT_COLOR_INPUT: annot_color_input_start(v); break;
+        case CMD_ANNOT_UNDO: annot_undo(v); break;
         case CMD_QUIT:
             exit(0);
         default:
@@ -320,6 +331,11 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
 
     if (v->search_mode) {
         handle_search_key(v, ks, buf, len);
+        return;
+    }
+    if (v->color_input_mode) {
+        annot_color_input_key(v, ks, buf, len);
+        win_draw(v);
         return;
     }
 
@@ -379,7 +395,15 @@ static void usage(const char *prog)
         "  F                 toggle fullscreen\n"
         "  /  n/N            search, next/prev hit\n"
         "  q/Esc             quit\n"
-        "  Ctrl+scroll       zoom\n",
+        "  Ctrl+scroll       zoom\n"
+        "\n"
+        "Annotation tools:\n"
+        "  Ctrl+h            toggle highlighter\n"
+        "  Ctrl+p            toggle pencil\n"
+        "  [  ]              previous/next palette color\n"
+        "  <  >              decrease/increase thickness\n"
+        "  Shift+C           type a custom color (name or #rrggbb)\n"
+        "  Ctrl+u            undo last stroke segment (repeat for more)\n",
         prog);
 }
 
@@ -443,6 +467,8 @@ int main(int argc, char **argv)
     v.show_fullpath             = show_fullpath;
 
     if (!win_init(&v)) return 1;   /* only once */
+    annot_config_defaults(&v);
+    if (!is_dir) annot_init(&v);
     v.bar_visible = (is_dir) ? showbar_thumb : showbar_normal;
 
     if (is_dir) {
@@ -482,7 +508,34 @@ int main(int argc, char **argv)
                 break;
             case ButtonPress:
                 handle_button(&v, &ev.xbutton);
+                if (annot_active(&v)) {
+                    annot_button(&v, &ev.xbutton, 1);
+                    win_draw(&v);
+                }
                 break;
+            case ButtonRelease:
+                if (annot_active(&v))
+                    annot_button(&v, &ev.xbutton, 0);
+                break;
+            case MotionNotify: {
+                /* Drain any additional queued motion events and act only
+                 * on the latest one -- a fast drag can otherwise queue up
+                 * many more motion events than we can usefully redraw for,
+                 * making input feel laggy. Segments still connect from the
+                 * last *processed* point to this one, so no gaps appear;
+                 * we just skip drawing every micro-step of a fast stroke. */
+                XEvent latest = ev;
+                while (XPending(v.dpy)) {
+                    XEvent peek;
+                    XPeekEvent(v.dpy, &peek);
+                    if (peek.type != MotionNotify) break;
+                    XNextEvent(v.dpy, &latest);
+                }
+                annot_motion(&v, &latest.xmotion);
+                if (annot_active(&v) && v.mode != MODE_THUMB)
+                    win_draw(&v);
+                break;
+            }
             case ConfigureNotify: {
                                       XConfigureEvent *ce = &ev.xconfigure;
                                       if (ce->width != v.win_w || ce->height != v.win_h) {
@@ -500,6 +553,7 @@ int main(int argc, char **argv)
         }
     }
 quit:
+    annot_free_all(&v);
     if (v.filename_owned) free((char*)v.filename);
     if (v.pix) pdf_pix_free(v.pix);
     if (v.doc) pdf_close(v.doc);

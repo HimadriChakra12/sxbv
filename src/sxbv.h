@@ -58,6 +58,13 @@ typedef enum {
     CMD_ROTATE_CW,   CMD_ROTATE_CCW,
     CMD_FULLSCREEN,
     CMD_SEARCH_START, CMD_SEARCH_NEXT, CMD_SEARCH_PREV,
+
+    CMD_TOGGLE_HIGHLIGHT, CMD_TOGGLE_PENCIL,
+    CMD_ANNOT_COLOR_PREV, CMD_ANNOT_COLOR_NEXT,
+    CMD_ANNOT_THICK_DEC,  CMD_ANNOT_THICK_INC,
+    CMD_ANNOT_COLOR_INPUT,
+    CMD_ANNOT_UNDO,
+
     CMD_QUIT,
 } Command;
 
@@ -79,6 +86,34 @@ typedef enum {
     MODE_NORMAL,
     MODE_THUMB,
 } ViewMode;
+
+/* ------------------------------------------------------------------ */
+/* Annotation tools (pencil / highlighter)                             */
+/* ------------------------------------------------------------------ */
+
+typedef enum {
+    ANNOT_NONE,
+    ANNOT_PENCIL,
+    ANNOT_HIGHLIGHT,
+} AnnotMode;
+
+/* One drawn segment. Endpoints and thickness are normalised to the
+ * page pixmap's width/height *at the zoom level they were drawn*, so
+ * strokes rescale correctly when the user zooms in or out afterwards.
+ * (Rotation changes swap pixmap w/h; re-mapping annotations across a
+ * rotation change is a known limitation left for a later pass.) */
+typedef struct {
+    float nx0, ny0, nx1, ny1;  /* endpoints, 0..1 range            */
+    float thickness;           /* fraction of page pixmap width    */
+    unsigned char r, g, b;
+    unsigned char alpha;       /* 255 = opaque pencil, translucent for highlighter */
+} AnnotSeg;
+
+typedef struct {
+    AnnotSeg *segs;
+    int       count;
+    int       cap;
+} PageAnnots;
 
 /* ------------------------------------------------------------------ */
 /* Thumbnail browser entry                                             */
@@ -187,6 +222,40 @@ typedef struct {
     int show_rotation;
     int show_fullscreen_indicator;
     int show_fullpath;
+
+    /* ---- annotation tools ---- */
+    AnnotMode annot_mode;
+
+    float pencil_thickness;
+    unsigned char pencil_r, pencil_g, pencil_b;
+    int pencil_palette_idx;
+
+    float highlight_thickness;
+    unsigned char highlight_r, highlight_g, highlight_b;
+    int highlight_palette_idx;
+
+    PageAnnots *page_annots;     /* one entry per page   */
+    int         annot_page_count; /* size of page_annots  */
+
+    /* Persistent cache: current page's pixels, pre-converted to BGRX,
+     * with all of that page's strokes already blended in. Rebuilt in
+     * full only when the base image changes (page/zoom/rotate) or a
+     * stroke is removed; updated incrementally (just the new
+     * segment's bbox) while actively drawing. This is what keeps
+     * drawing responsive -- see annot_rebuild()/annot_composite_last_segment(). */
+    unsigned char *annot_bgrx;
+    int annot_bgrx_w, annot_bgrx_h;
+
+    int   annot_drawing;         /* button currently held while drawing */
+    float annot_last_nx, annot_last_ny;
+
+    int have_pointer;            /* pointer position known this session */
+    int ptr_x, ptr_y;            /* last pointer position, window coords */
+
+    int  color_input_mode;
+    char color_input_buf[64];
+
+    int bar_forced;              /* bar was auto-shown by entering an annot mode */
 } Viewer;
 
 /* ------------------------------------------------------------------ */
@@ -220,5 +289,39 @@ void thumb_free(Viewer *v);
 void thumb_draw(Viewer *v);
 void thumb_render_next(Viewer *v);
 void thumb_scroll_to_sel(Viewer *v);
+
+/* annotate.c */
+void annot_config_defaults(Viewer *v);   /* call once, after win_init() */
+void annot_init(Viewer *v);              /* (re)allocate per-page storage */
+void annot_free_all(Viewer *v);
+int  annot_active(Viewer *v);            /* mode != ANNOT_NONE */
+
+void annot_toggle(Viewer *v, AnnotMode m);
+void annot_color_cycle(Viewer *v, int dir);
+void annot_thickness_adjust(Viewer *v, float d);
+void annot_undo(Viewer *v);
+
+void annot_color_input_start(Viewer *v);
+void annot_color_input_key(Viewer *v, KeySym ks, const char *buf, int len);
+
+void annot_button(Viewer *v, XButtonEvent *be, int press);
+void annot_motion(Viewer *v, XMotionEvent *me);
+
+/* Blend this page's strokes into a BGRX (0x00RRGGBB words) pixel buffer
+ * of the given dimensions, matching to_bgrx()'s output format. */
+void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h);
+
+/* Full rebuild of v->annot_bgrx from v->pix + all stored segments.
+ * Call after render_page() (page/zoom/rotate changed) and after undo. */
+void annot_rebuild(Viewer *v);
+
+/* Incremental: blend only the most-recently-added segment onto the
+ * already-cached v->annot_bgrx. Call right after adding a segment
+ * while actively drawing. */
+void annot_composite_last_segment(Viewer *v);
+
+/* Draw the thickness-preview ring around the last known pointer
+ * position, when in pencil/highlight mode. */
+void annot_draw_cursor(Viewer *v, Drawable dst);
 
 #endif /* SXBV_H */
