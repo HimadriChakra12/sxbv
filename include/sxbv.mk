@@ -19,7 +19,7 @@ endif
 
 COLOR = # -fcolor-diagnostics
 FLT   = # -flto=thin
-LDFLAGS = $(FLT)
+LDFLAGS = $(FLT) -lpng -ltiff
 
 POPPLER  = include/poppler-src
 POPINC   = -I$(POPPLER) -I$(POPPLER)/poppler -I$(POPPLER)/goo \
