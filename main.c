@@ -339,6 +339,16 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
         return;
     }
 
+    /* While a tool is active, bare 1-5 pick a palette preset directly
+     * instead of accumulating as a numeric prefix (which only makes
+     * sense for movement/paging commands, not while drawing). */
+    if (annot_active(v) && !(ke->state & (ControlMask | ShiftMask)) &&
+        ks >= XK_1 && ks <= XK_5) {
+        annot_select_preset(v, (int)(ks - XK_1));
+        win_draw(v);
+        return;
+    }
+
     /* Accumulate numeric prefix (e.g. 5j = scroll 5 lines) */
     if (ks >= XK_0 && ks <= XK_9 && !(ke->state & ControlMask)) {
         v->num_buf   = v->num_valid ? v->num_buf * 10 + (ks - XK_0) : (ks - XK_0);
@@ -401,6 +411,7 @@ static void usage(const char *prog)
         "  Ctrl+h            toggle highlighter\n"
         "  Ctrl+p            toggle pencil\n"
         "  [  ]              previous/next palette color\n"
+        "  1-5               jump directly to preset color 1-5\n"
         "  <  >              decrease/increase thickness\n"
         "  Shift+C           type a custom color (name or #rrggbb)\n"
         "  Ctrl+u            undo last stroke segment (repeat for more)\n",

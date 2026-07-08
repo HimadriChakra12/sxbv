@@ -107,6 +107,8 @@ typedef struct {
     float thickness;           /* fraction of page pixmap width    */
     unsigned char r, g, b;
     unsigned char alpha;       /* 255 = opaque pencil, translucent for highlighter */
+    unsigned char multiply;    /* 1 = multiply-blend (highlighter), 0 = flat overwrite (pencil) */
+    unsigned char stroke_start; /* 1 = first segment of a new mousedown-to-mouseup stroke */
 } AnnotSeg;
 
 typedef struct {
@@ -249,6 +251,16 @@ typedef struct {
     int   annot_drawing;         /* button currently held while drawing */
     float annot_last_nx, annot_last_ny;
 
+    /* Per-stroke coverage mask: tracks which pixels the *current*
+     * stroke has already colored, so a self-crossing scribble doesn't
+     * re-blend (and darken) pixels it's already covered. Reset at the
+     * start of each new stroke; replay during a full rebuild uses the
+     * same reset points (AnnotSeg.stroke_start) so the result after a
+     * zoom/rotate matches what was shown live while drawing. */
+    unsigned char *stroke_touched;
+    int stroke_touched_w, stroke_touched_h;
+    int stroke_pending_start;    /* next segment pushed starts a new stroke */
+
     int have_pointer;            /* pointer position known this session */
     int ptr_x, ptr_y;            /* last pointer position, window coords */
 
@@ -298,6 +310,7 @@ int  annot_active(Viewer *v);            /* mode != ANNOT_NONE */
 
 void annot_toggle(Viewer *v, AnnotMode m);
 void annot_color_cycle(Viewer *v, int dir);
+void annot_select_preset(Viewer *v, int idx); /* direct pick, 0-based index into annot_palette */
 void annot_thickness_adjust(Viewer *v, float d);
 void annot_undo(Viewer *v);
 

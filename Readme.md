@@ -27,15 +27,26 @@ Build/runtime deps (Debian/Ubuntu package names): `clang`, `libx11-dev`,
 |-----------------|--------------------------------------------|
 | `Ctrl+p`        | toggle pencil mode                        |
 | `Ctrl+h`        | toggle highlighter mode                   |
+| `1`-`5`         | jump directly to preset color 1-5         |
 | `[` / `]`       | previous / next palette color             |
 | `<` / `>`       | decrease / increase thickness             |
 | `Shift+C`       | type a custom color (name or `#rrggbb`)   |
 | `Ctrl+u`        | undo last stroke segment (repeat for more)|
 | left-drag       | draw, while a tool is active              |
 
-- Pencil defaults to red, highlighter to yellow — both configurable in
-  `config.h` (`pencil_default_color`, `highlight_default_color`,
-  `*_DEFAULT_THICKNESS`, `annot_palette[]`, `HIGHLIGHT_ALPHA`).
+- The palette is exactly 5 presets (`annot_palette[]` in `config.h`):
+  yellow, green, cyan, pink, red. `1`-`5` pick one directly; `[`/`]`
+  still cycle through them. Each tool (pencil/highlighter) tracks its
+  own current preset independently.
+- Default preset per tool is config-driven: `HIGHLIGHT_DEFAULT_PRESET`
+  (0 = yellow) and `PENCIL_DEFAULT_PRESET` (4 = red), both 0-based
+  indices into `annot_palette[]`.
+- `1`-`5` only act as color picks while a tool is active; otherwise
+  they still work as the existing vim-style numeric prefix (`5j` etc).
+- Highlighter opacity is `HIGHLIGHT_ALPHA` in `config.h` (0-255).
+  Raised to 190 from the original 90 so it reads as a bold marker
+  instead of a faint watercolor wash — lower it if you want a lighter
+  look.
 - The status bar auto-shows when you enter either mode (if it was
   hidden) and displays the active tool + thickness on the right, and
   the color-input prompt on the left (mirrors the existing search
@@ -87,6 +98,41 @@ All of the above (drawing, color cycling, thickness, hex/named color
 input, undo, and the performance fix) was smoke-tested end-to-end under
 Xvfb with simulated input and verified pixel-exact / timing-measured —
 not just "it builds."
+
+## Highlighter color fix + 5-preset palette
+
+The highlighter used a flat alpha-over blend, which blends *everything*
+underneath toward the highlight color — including dark text — so text
+under a stroke visibly faded ("watercolor" look). Real highlighters
+don't do that: they saturate the light page background while leaving
+dark text alone. Switched the highlighter (only the highlighter —
+pencil is unaffected) to a multiply blend: `result = base × color / 255`.
+
+First pass left `HIGHLIGHT_ALPHA` at 190 (a holdover from the old
+"opacity" knob), which faded the blend 25% back toward the original
+background — visibly paler than a real marker. Measured directly
+against the reference screenshot: the reference's highlight band
+samples at `(255,255,153)` over white, which is just the raw palette
+color, i.e. *no* fade at all. `HIGHLIGHT_ALPHA` is now `255`
+(full-strength) to match. Text protection comes from the multiply
+blend itself, not from this value, so turning it down only makes the
+background paler — it doesn't help text legibility, which is why it's
+now documented as "leave at 255 unless you want a deliberately faint
+look" rather than treated as a general opacity dial.
+
+Verified pixel-exact after the change: over white background the
+result is `(255,255,152)` = `#FFFF98`, matching the reference's
+measured `(255,255,153)` almost exactly (1-unit rounding). Directly
+over black text the pixel comes back pure `(0,0,0)`, completely
+untouched.
+
+The 5 presets and the `1`-`5` direct-select keys use the exact colors
+from your reference screenshot (yellow `#ffff98`, green `#53ffbc`, cyan
+`#80ebff`, pink `#ffcbe6`, red `#ff4f5f`), with yellow as the default —
+matching the ringed/selected swatch in that screenshot. `1`-`5` only
+intercept as presets while a tool is active; otherwise they still work
+as the normal vim-style repeat-count prefix (`5j` etc.), so nothing
+existing broke.
 
 ## Roadmap (by design, done incrementally — see project discussion)
 

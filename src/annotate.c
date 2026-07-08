@@ -42,13 +42,12 @@ void annot_config_defaults(Viewer *v)
     v->pencil_thickness    = PENCIL_DEFAULT_THICKNESS;
     v->highlight_thickness = HIGHLIGHT_DEFAULT_THICKNESS;
 
-    parse_color(v, pencil_default_color,
+    v->pencil_palette_idx    = PENCIL_DEFAULT_PRESET;
+    v->highlight_palette_idx = HIGHLIGHT_DEFAULT_PRESET;
+    parse_color(v, annot_palette[v->pencil_palette_idx],
                 &v->pencil_r, &v->pencil_g, &v->pencil_b);
-    parse_color(v, highlight_default_color,
+    parse_color(v, annot_palette[v->highlight_palette_idx],
                 &v->highlight_r, &v->highlight_g, &v->highlight_b);
-
-    v->pencil_palette_idx    = -1; /* -1 = using config default, not a palette slot */
-    v->highlight_palette_idx = -1;
 
     v->annot_mode   = ANNOT_NONE;
     v->annot_drawing = 0;
@@ -56,6 +55,10 @@ void annot_config_defaults(Viewer *v)
     v->color_input_mode = 0;
     v->color_input_buf[0] = '\0';
     v->bar_forced = 0;
+
+    v->stroke_touched = NULL;
+    v->stroke_touched_w = v->stroke_touched_h = 0;
+    v->stroke_pending_start = 1;
 }
 
 void annot_free_all(Viewer *v)
@@ -72,6 +75,10 @@ void annot_free_all(Viewer *v)
     v->annot_bgrx   = NULL;
     v->annot_bgrx_w = 0;
     v->annot_bgrx_h = 0;
+
+    free(v->stroke_touched);
+    v->stroke_touched = NULL;
+    v->stroke_touched_w = v->stroke_touched_h = 0;
 }
 
 void annot_init(Viewer *v)
@@ -141,6 +148,14 @@ void annot_color_cycle(Viewer *v, int dir)
     }
     *idx = ((*idx + dir) % ANNOT_PALETTE_LEN + ANNOT_PALETTE_LEN) % ANNOT_PALETTE_LEN;
     parse_color(v, annot_palette[*idx], cur_r(v), cur_g(v), cur_b(v));
+}
+
+void annot_select_preset(Viewer *v, int idx)
+{
+    if (!annot_active(v)) return;
+    if (idx < 0 || idx >= ANNOT_PALETTE_LEN) return;
+    *cur_pidx(v) = idx;
+    parse_color(v, annot_palette[idx], cur_r(v), cur_g(v), cur_b(v));
 }
 
 void annot_thickness_adjust(Viewer *v, float d)
@@ -235,6 +250,9 @@ static void push_seg(Viewer *v, float nx0, float ny0, float nx1, float ny1)
     s->thickness = *cur_thick(v) / (float)v->pix_w;
     s->r = *cur_r(v); s->g = *cur_g(v); s->b = *cur_b(v);
     s->alpha = (v->annot_mode == ANNOT_HIGHLIGHT) ? HIGHLIGHT_ALPHA : 255;
+    s->multiply = (v->annot_mode == ANNOT_HIGHLIGHT) ? 1 : 0;
+    s->stroke_start = (unsigned char)v->stroke_pending_start;
+    v->stroke_pending_start = 0;
 }
 
 void annot_button(Viewer *v, XButtonEvent *be, int press)
@@ -248,6 +266,7 @@ void annot_button(Viewer *v, XButtonEvent *be, int press)
         v->annot_drawing  = 1;
         v->annot_last_nx  = nx;
         v->annot_last_ny  = ny;
+        v->stroke_pending_start = 1;
         /* dot on click-without-drag: zero-length segment still rasterises
          * as a filled circle in annot_composite(). */
         push_seg(v, nx, ny, nx, ny);
@@ -277,17 +296,31 @@ void annot_motion(Viewer *v, XMotionEvent *me)
 /* Compositing onto the rendered page                                   */
 
 static inline void blend_px(unsigned int *px, unsigned char r, unsigned char g,
-                             unsigned char b, unsigned char a)
+                             unsigned char b, unsigned char a, int multiply)
 {
-    if (a == 255) {
+    if (!multiply && a == 255) {
         *px = ((unsigned int)r << 16) | ((unsigned int)g << 8) | b;
         return;
     }
     unsigned int old = *px;
     unsigned int or_ = (old >> 16) & 0xff, og = (old >> 8) & 0xff, ob = old & 0xff;
-    unsigned int nr = (r * a + or_ * (255 - a)) / 255;
-    unsigned int ng = (g * a + og * (255 - a)) / 255;
-    unsigned int nb = (b * a + ob * (255 - a)) / 255;
+
+    unsigned int tr, tg, tb; /* blend target: multiplied color, or flat color */
+    if (multiply) {
+        /* Real highlighter behavior: saturates light/white background,
+         * leaves dark text close to untouched (base*color/255 stays
+         * near 0 when base is already dark) -- unlike a flat alpha-over
+         * blend, which washes out text too and reads as "watercolor". */
+        tr = (or_ * r) / 255;
+        tg = (og * g) / 255;
+        tb = (ob * b) / 255;
+    } else {
+        tr = r; tg = g; tb = b;
+    }
+
+    unsigned int nr = (tr * a + or_ * (255 - a)) / 255;
+    unsigned int ng = (tg * a + og * (255 - a)) / 255;
+    unsigned int nb = (tb * a + ob * (255 - a)) / 255;
     *px = (nr << 16) | (ng << 8) | nb;
 }
 
@@ -295,7 +328,8 @@ static void raster_thick_segment(unsigned int *buf, int w, int h,
                                   float x0, float y0, float x1, float y1,
                                   float half_thick,
                                   unsigned char r, unsigned char g, unsigned char b,
-                                  unsigned char a)
+                                  unsigned char a, int multiply,
+                                  unsigned char *touched)
 {
     if (half_thick < 0.5f) half_thick = 0.5f;
 
@@ -316,6 +350,7 @@ static void raster_thick_segment(unsigned int *buf, int w, int h,
 
     for (int y = miny; y < maxy; y++) {
         unsigned int *row = buf + (size_t)y * w;
+        unsigned char *trow = touched ? touched + (size_t)y * w : NULL;
         for (int x = minx; x < maxx; x++) {
             float px = x + 0.5f, py = y + 0.5f;
             float dist2;
@@ -330,18 +365,31 @@ static void raster_thick_segment(unsigned int *buf, int w, int h,
                 float ex = px - cx, ey = py - cy;
                 dist2 = ex * ex + ey * ey;
             }
-            if (dist2 <= ht2)
-                blend_px(&row[x], r, g, b, a);
+            if (dist2 <= ht2) {
+                /* Coverage semantics, not accumulation: once this
+                 * stroke has colored a pixel, going over it again
+                 * (e.g. a scribble crossing itself) must not darken it
+                 * further -- that's what real highlighters/browser
+                 * text-highlight do, and what made overlaps look
+                 * patchy instead of a uniform solid color. */
+                if (trow) {
+                    if (trow[x]) continue;
+                    trow[x] = 1;
+                }
+                blend_px(&row[x], r, g, b, a, multiply);
+            }
         }
     }
 }
 
-static void composite_seg(unsigned int *buf, int w, int h, const AnnotSeg *s)
+static void composite_seg(unsigned int *buf, int w, int h, const AnnotSeg *s,
+                           unsigned char *touched)
 {
     float x0 = s->nx0 * (float)w, y0 = s->ny0 * (float)h;
     float x1 = s->nx1 * (float)w, y1 = s->ny1 * (float)h;
     float half = (s->thickness * (float)w) / 2.0f;
-    raster_thick_segment(buf, w, h, x0, y0, x1, y1, half, s->r, s->g, s->b, s->alpha);
+    raster_thick_segment(buf, w, h, x0, y0, x1, y1, half, s->r, s->g, s->b, s->alpha,
+                          s->multiply, s->multiply ? touched : NULL);
 }
 
 void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h)
@@ -352,9 +400,20 @@ void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h)
     PageAnnots *pa = &v->page_annots[v->page];
     if (pa->count == 0) return;
 
+    /* One global coverage mask for the entire highlight layer on this
+     * page. A pixel that has been multiplied by ANY highlight stroke is
+     * marked touched and skipped by every subsequent one -- this is
+     * what real highlighters and browser text-highlight do: overlapping
+     * the same region again produces the same solid color, not a darker
+     * compounded result. The mask is NOT reset between strokes.
+     * Pencil segments (multiply==0) ignore the mask entirely. */
+    unsigned char *touched = calloc((size_t)w * h, 1);
+
     unsigned int *buf = (unsigned int *)bgrx;
     for (int i = 0; i < pa->count; i++)
-        composite_seg(buf, w, h, &pa->segs[i]);
+        composite_seg(buf, w, h, &pa->segs[i], touched);
+
+    free(touched);
 }
 
 /* Full rebuild: re-converts the current page to BGRX and replays every
@@ -378,7 +437,33 @@ void annot_rebuild(Viewer *v)
     v->annot_bgrx_w = v->pix_w;
     v->annot_bgrx_h = v->pix_h;
 
+    /* Invalidate the live touched mask -- the full replay below will
+     * build fresh coverage from scratch, and subsequent live segments
+     * need to start from that same state, not the previous page's mask. */
+    if (v->stroke_touched) {
+        memset(v->stroke_touched, 0,
+               (size_t)v->stroke_touched_w * v->stroke_touched_h);
+        v->stroke_touched_w = 0; /* force realloc to new page size */
+        v->stroke_touched_h = 0;
+    }
+
     annot_composite(v, v->annot_bgrx, v->annot_bgrx_w, v->annot_bgrx_h);
+}
+
+/* Ensure the per-page highlight coverage mask matches the current page
+ * size. Never reset between strokes -- the whole point is that any
+ * pixel already multiplied by a previous stroke on this page is skipped
+ * by every subsequent one (same behavior as full rebuild). The mask is
+ * only cleared by annot_rebuild() when the base image changes. */
+static unsigned char *stroke_touched_for(Viewer *v)
+{
+    if (v->stroke_touched_w != v->annot_bgrx_w || v->stroke_touched_h != v->annot_bgrx_h) {
+        free(v->stroke_touched);
+        v->stroke_touched = calloc((size_t)v->annot_bgrx_w * v->annot_bgrx_h, 1);
+        v->stroke_touched_w = v->annot_bgrx_w;
+        v->stroke_touched_h = v->annot_bgrx_h;
+    }
+    return v->stroke_touched;
 }
 
 /* Incremental update: blend just the most-recently-added segment onto
@@ -393,8 +478,9 @@ void annot_composite_last_segment(Viewer *v)
     PageAnnots *pa = &v->page_annots[v->page];
     if (pa->count == 0) return;
 
-    composite_seg((unsigned int *)v->annot_bgrx, v->annot_bgrx_w, v->annot_bgrx_h,
-                  &pa->segs[pa->count - 1]);
+    AnnotSeg *s = &pa->segs[pa->count - 1];
+    unsigned char *touched = s->multiply ? stroke_touched_for(v) : NULL;
+    composite_seg((unsigned int *)v->annot_bgrx, v->annot_bgrx_w, v->annot_bgrx_h, s, touched);
 }
 
 /* ------------------------------------------------------------------ */

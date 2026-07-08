@@ -46,17 +46,24 @@ static const int show_fullscreen_indicator = 0;
 
 /* ---- Annotation tools: pencil (opaque) & highlighter (translucent) ---- */
 
-/* Cycle through this palette with '[' / ']'. Accepts any X11 color name
- * or "#rrggbb" hex string. */
+/* Exactly 5 presets, selectable by pressing 1-5 while a tool is active
+ * (also cycled with '[' / ']'). Accepts any X11 color name or
+ * "#rrggbb" hex string. Keep this at 5 entries -- the 1-5 keys map
+ * directly to slots 0-4. */
 static const char *annot_palette[] = {
-    "#ff0000", "#fabd2f", "#00c853", "#2196f3",
-    "#ffffff", "#000000", "#ff00ff", "#00e5ff",
+    "#ffff98",  /* 1: yellow (matches the ringed/default swatch in your screenshot) */
+    "#53ffbc",  /* 2: green  */
+    "#80ebff",  /* 3: cyan   */
+    "#ffcbe6",  /* 4: pink   */
+    "#ff4f5f",  /* 5: red    */
 };
 #define ANNOT_PALETTE_LEN ((int)(sizeof(annot_palette) / sizeof(annot_palette[0])))
 
-/* Requirement: pencil defaults to red, highlighter defaults to yellow. */
-static const char pencil_default_color[]    = "#ff0000";
-static const char highlight_default_color[] = "#fabd2f";
+/* Default preset (index into annot_palette above, 0-based) each tool
+ * starts on. Highlighter starts on yellow (slot 0); pencil starts on
+ * red (slot 4). Change these to start on a different preset. */
+#define HIGHLIGHT_DEFAULT_PRESET 0
+#define PENCIL_DEFAULT_PRESET    4
 
 /* Thickness is stored normalised to page width, so strokes stay visually
  * consistent across zoom levels. These defaults are in pixels at the
@@ -67,8 +74,18 @@ static const char highlight_default_color[] = "#fabd2f";
 #define ANNOT_THICK_MAX   80.0f
 #define ANNOT_THICK_STEP   1.0f
 
-/* Highlighter translucency, 0 (invisible) - 255 (fully opaque). */
-#define HIGHLIGHT_ALPHA 90
+/* Highlighter blend strength, 0 (no effect) - 255 (fully multiplied).
+ * The highlighter uses a multiply blend (like a real marker): it
+ * saturates the light page background while leaving dark text mostly
+ * untouched, instead of washing everything toward a flat color like a
+ * plain alpha-over blend would (that's what read as "watercolor").
+ * This is left at full strength (255) on purpose -- a real highlighter
+ * band is essentially solid color over paper, not a faded tint; the
+ * multiply blend itself (not this value) is what keeps text readable
+ * underneath, so turning this down just makes the *background* paler
+ * without helping text legibility. Lower it only if you want a
+ * deliberately faint/translucent look. */
+#define HIGHLIGHT_ALPHA 255
 
 /* Outline color of the thickness-preview ring around the cursor. */
 #define ANNOT_CURSOR_RING_COLOR "#ffffff"
