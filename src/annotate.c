@@ -1,15 +1,21 @@
 /*
  * annotate.c -- pencil & highlighter annotation tools.
  *
- * Strokes are stored per-page as a flat list of thick line segments,
- * with endpoints/thickness normalised to the page pixmap's width and
- * height at the zoom level active when they were drawn. This lets
- * strokes rescale correctly on zoom changes. See the AnnotSeg comment
- * in sxbv.h for the current limitation around page rotation.
+ * Two separate palettes (highlight_palette[], pencil_palette[]) are
+ * defined in config.h. Highlighter: 5 colors, 1-5 to select.
+ * Pencil: 10 colors, 1-0 to select. Both share [ / ] for cycling.
  *
- * Compositing happens directly on the BGRX pixel buffer produced by
- * to_bgrx(), before it becomes an XImage -- this gives true alpha
- * blending for the highlighter without needing an X compositor.
+ * Blending:
+ *   Pencil    -- flat opaque overwrite.
+ *   Highlight -- multiply blend (real marker behavior: saturates white
+ *                background, leaves dark text untouched). One global
+ *                coverage mask per page ensures overlapping highlight
+ *                strokes don't compound (same color result as one pass).
+ *
+ * Performance:
+ *   v->annot_bgrx is a persistent buffer: full rebuild only on
+ *   page/zoom change or undo/redo. Each new segment during live
+ *   drawing is blended incrementally (its bounding box only).
  */
 
 #include <stdio.h>
@@ -19,7 +25,7 @@
 #include "sxbv.h"
 
 /* ------------------------------------------------------------------ */
-/* Color parsing (accepts "#rrggbb" or any X11 color name)             */
+/* Color parsing                                                        */
 
 static void parse_color(Viewer *v, const char *spec,
                          unsigned char *r, unsigned char *g, unsigned char *b)
@@ -39,26 +45,29 @@ static void parse_color(Viewer *v, const char *spec,
 
 void annot_config_defaults(Viewer *v)
 {
+    v->pencil_palette_idx    = PENCIL_DEFAULT_PRESET;
+    v->highlight_palette_idx = HIGHLIGHT_DEFAULT_PRESET;
+
+    parse_color(v, pencil_palette[v->pencil_palette_idx],
+                &v->pencil_r, &v->pencil_g, &v->pencil_b);
+    parse_color(v, highlight_palette[v->highlight_palette_idx],
+                &v->highlight_r, &v->highlight_g, &v->highlight_b);
+
     v->pencil_thickness    = PENCIL_DEFAULT_THICKNESS;
     v->highlight_thickness = HIGHLIGHT_DEFAULT_THICKNESS;
 
-    v->pencil_palette_idx    = PENCIL_DEFAULT_PRESET;
-    v->highlight_palette_idx = HIGHLIGHT_DEFAULT_PRESET;
-    parse_color(v, annot_palette[v->pencil_palette_idx],
-                &v->pencil_r, &v->pencil_g, &v->pencil_b);
-    parse_color(v, annot_palette[v->highlight_palette_idx],
-                &v->highlight_r, &v->highlight_g, &v->highlight_b);
+    v->annot_mode          = ANNOT_NONE;
+    v->annot_drawing       = 0;
+    v->have_pointer        = 0;
+    v->bar_forced          = 0;
 
-    v->annot_mode   = ANNOT_NONE;
-    v->annot_drawing = 0;
-    v->have_pointer  = 0;
-    v->color_input_mode = 0;
-    v->color_input_buf[0] = '\0';
-    v->bar_forced = 0;
-
-    v->stroke_touched = NULL;
-    v->stroke_touched_w = v->stroke_touched_h = 0;
+    v->stroke_touched      = NULL;
+    v->stroke_touched_w    = v->stroke_touched_h = 0;
     v->stroke_pending_start = 1;
+
+    v->redo_stack = NULL;
+    v->redo_count = v->redo_cap = 0;
+    v->redo_page  = -1;
 }
 
 void annot_free_all(Viewer *v)
@@ -72,13 +81,17 @@ void annot_free_all(Viewer *v)
     v->annot_page_count = 0;
 
     free(v->annot_bgrx);
-    v->annot_bgrx   = NULL;
-    v->annot_bgrx_w = 0;
-    v->annot_bgrx_h = 0;
+    v->annot_bgrx = NULL;
+    v->annot_bgrx_w = v->annot_bgrx_h = 0;
 
     free(v->stroke_touched);
     v->stroke_touched = NULL;
     v->stroke_touched_w = v->stroke_touched_h = 0;
+
+    free(v->redo_stack);
+    v->redo_stack = NULL;
+    v->redo_count = v->redo_cap = 0;
+    v->redo_page  = -1;
 }
 
 void annot_init(Viewer *v)
@@ -95,67 +108,62 @@ int annot_active(Viewer *v)
 }
 
 /* ------------------------------------------------------------------ */
+/* Per-tool current-state accessors                                    */
+
+static unsigned char *cur_r(Viewer *v)    { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_r    : &v->highlight_r; }
+static unsigned char *cur_g(Viewer *v)    { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_g    : &v->highlight_g; }
+static unsigned char *cur_b(Viewer *v)    { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_b    : &v->highlight_b; }
+static float         *cur_thick(Viewer *v){ return v->annot_mode == ANNOT_PENCIL ? &v->pencil_thickness : &v->highlight_thickness; }
+static int           *cur_pidx(Viewer *v) { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_palette_idx : &v->highlight_palette_idx; }
+
+static int cur_palette_len(Viewer *v) {
+    return v->annot_mode == ANNOT_PENCIL ? PENCIL_PALETTE_LEN : HIGHLIGHT_PALETTE_LEN;
+}
+static const char *cur_palette_entry(Viewer *v, int i) {
+    return v->annot_mode == ANNOT_PENCIL ? pencil_palette[i] : highlight_palette[i];
+}
+
+/* ------------------------------------------------------------------ */
 /* Mode toggling                                                        */
 
 void annot_toggle(Viewer *v, AnnotMode m)
 {
-    if (v->mode == MODE_THUMB) return; /* tools only make sense on a page */
-
+    if (v->mode == MODE_THUMB) return;
     if (v->annot_mode == m) {
-        /* toggling the same tool off */
-        v->annot_mode = ANNOT_NONE;
+        v->annot_mode  = ANNOT_NONE;
         v->annot_drawing = 0;
-        if (v->bar_forced) {
-            v->bar_forced = 0;
-            /* leave the bar visible; user can hit 'b' to hide it again */
-        }
+        if (v->bar_forced) v->bar_forced = 0;
     } else {
-        v->annot_mode = m;
+        v->annot_mode  = m;
         v->annot_drawing = 0;
-        if (!v->bar_visible) {
-            v->bar_visible = 1;
-            v->bar_forced   = 1;
-        }
+        if (!v->bar_visible) { v->bar_visible = 1; v->bar_forced = 1; }
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* Per-tool color / thickness accessors                                */
+/* Color / thickness                                                   */
 
-static unsigned char *cur_r(Viewer *v) { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_r : &v->highlight_r; }
-static unsigned char *cur_g(Viewer *v) { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_g : &v->highlight_g; }
-static unsigned char *cur_b(Viewer *v) { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_b : &v->highlight_b; }
-static float          *cur_thick(Viewer *v) { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_thickness : &v->highlight_thickness; }
-static int            *cur_pidx(Viewer *v) { return v->annot_mode == ANNOT_PENCIL ? &v->pencil_palette_idx : &v->highlight_palette_idx; }
-
-static int find_palette_idx(Viewer *v, unsigned char r, unsigned char g, unsigned char b)
+static void apply_palette(Viewer *v, int idx)
 {
-    for (int i = 0; i < ANNOT_PALETTE_LEN; i++) {
-        unsigned char pr, pg, pb;
-        parse_color(v, annot_palette[i], &pr, &pg, &pb);
-        if (pr == r && pg == g && pb == b) return i;
-    }
-    return -1;
-}
-
-void annot_color_cycle(Viewer *v, int dir)
-{
-    if (!annot_active(v)) return;
-    int *idx = cur_pidx(v);
-    if (*idx < 0) {
-        int found = find_palette_idx(v, *cur_r(v), *cur_g(v), *cur_b(v));
-        *idx = (found >= 0) ? found : 0;
-    }
-    *idx = ((*idx + dir) % ANNOT_PALETTE_LEN + ANNOT_PALETTE_LEN) % ANNOT_PALETTE_LEN;
-    parse_color(v, annot_palette[*idx], cur_r(v), cur_g(v), cur_b(v));
+    parse_color(v, cur_palette_entry(v, idx), cur_r(v), cur_g(v), cur_b(v));
+    *cur_pidx(v) = idx;
 }
 
 void annot_select_preset(Viewer *v, int idx)
 {
     if (!annot_active(v)) return;
-    if (idx < 0 || idx >= ANNOT_PALETTE_LEN) return;
-    *cur_pidx(v) = idx;
-    parse_color(v, annot_palette[idx], cur_r(v), cur_g(v), cur_b(v));
+    int plen = cur_palette_len(v);
+    if (idx < 0 || idx >= plen) return;
+    apply_palette(v, idx);
+}
+
+void annot_color_cycle(Viewer *v, int dir)
+{
+    if (!annot_active(v)) return;
+    int plen = cur_palette_len(v);
+    int idx  = *cur_pidx(v);
+    idx = ((idx + dir) % plen + plen) % plen;
+    apply_palette(v, idx);
 }
 
 void annot_thickness_adjust(Viewer *v, float d)
@@ -167,123 +175,186 @@ void annot_thickness_adjust(Viewer *v, float d)
     if (*t > ANNOT_THICK_MAX) *t = ANNOT_THICK_MAX;
 }
 
+/* ------------------------------------------------------------------ */
+/* Undo / redo                                                          */
+
+static void clear_redo(Viewer *v)
+{
+    v->redo_count = 0;
+    v->redo_page  = -1;
+}
+
 void annot_undo(Viewer *v)
 {
-    if (!annot_active(v)) return;
     if (v->page < 0 || v->page >= v->annot_page_count) return;
     PageAnnots *pa = &v->page_annots[v->page];
-    if (pa->count > 0) {
-        pa->count--;
-        annot_rebuild(v); /* can't un-blend a pixel, so replay from scratch */
+    if (pa->count == 0) return;
+
+    /* Find the start of the last stroke (last segment with stroke_start=1,
+     * or seg 0 if none). Remove all segments from there to end. */
+    int stroke_begin = 0;
+    for (int i = pa->count - 1; i > 0; i--) {
+        if (pa->segs[i].stroke_start) { stroke_begin = i; break; }
     }
+
+    /* Push removed segments onto redo stack (in order) */
+    if (v->redo_page != v->page) clear_redo(v);
+    v->redo_page = v->page;
+    int n = pa->count - stroke_begin;
+    if (v->redo_count + n > v->redo_cap) {
+        int newcap = v->redo_cap + n + 64;
+        AnnotSeg *ns = realloc(v->redo_stack, (size_t)newcap * sizeof(AnnotSeg));
+        if (ns) { v->redo_stack = ns; v->redo_cap = newcap; }
+    }
+    if (v->redo_stack && v->redo_count + n <= v->redo_cap) {
+        memcpy(v->redo_stack + v->redo_count, pa->segs + stroke_begin,
+               (size_t)n * sizeof(AnnotSeg));
+        v->redo_count += n;
+    }
+
+    pa->count = stroke_begin;
+    v->stroke_pending_start = 1;
+    annot_rebuild(v);
+}
+
+void annot_redo(Viewer *v)
+{
+    if (v->redo_count == 0) return;
+    if (v->page < 0 || v->page >= v->annot_page_count) return;
+    if (v->redo_page != v->page) { clear_redo(v); return; }
+
+    /* Find the last stroke on redo stack -- work backwards from top
+     * to find stroke_start boundary, then pop that whole stroke. */
+    int stroke_begin = v->redo_count - 1;
+    while (stroke_begin > 0 && !v->redo_stack[stroke_begin].stroke_start)
+        stroke_begin--;
+
+    int n = v->redo_count - stroke_begin;
+    PageAnnots *pa = &v->page_annots[v->page];
+    if (pa->count + n > pa->cap) {
+        int newcap = pa->cap + n + 64;
+        AnnotSeg *ns = realloc(pa->segs, (size_t)newcap * sizeof(AnnotSeg));
+        if (!ns) return;
+        pa->segs = ns; pa->cap = newcap;
+    }
+    memcpy(pa->segs + pa->count, v->redo_stack + stroke_begin,
+           (size_t)n * sizeof(AnnotSeg));
+    pa->count += n;
+    v->redo_count -= n;
+
+    annot_rebuild(v);
 }
 
 /* ------------------------------------------------------------------ */
-/* Color-input prompt (mirrors search_mode's bar prompt)               */
+/* Save (export annotations to a flat text file alongside the PDF)     */
 
-void annot_color_input_start(Viewer *v)
+void annot_save(Viewer *v)
 {
-    if (!annot_active(v)) return;
-    v->color_input_mode = 1;
-    v->color_input_buf[0] = '\0';
-}
+    if (!v->filename || !v->doc) return;
+    if (v->annot_page_count == 0) return;
 
-void annot_color_input_key(Viewer *v, KeySym ks, const char *buf, int len)
-{
-    if (ks == XK_Return || ks == XK_KP_Enter) {
-        if (v->color_input_buf[0]) {
-            XColor xc;
-            if (XParseColor(v->dpy, v->cmap, v->color_input_buf, &xc)) {
-                *cur_r(v) = xc.red   >> 8;
-                *cur_g(v) = xc.green >> 8;
-                *cur_b(v) = xc.blue  >> 8;
-                *cur_pidx(v) = -1; /* custom color, not a palette slot */
-            } else {
-                fprintf(stderr, "sxbv: unknown color '%s'\n", v->color_input_buf);
-            }
+    /* Build PdfInkStroke arrays per page */
+    const PdfInkStroke **stroke_arrays = calloc((size_t)v->annot_page_count,
+                                                 sizeof(PdfInkStroke*));
+    int *n_per_page = calloc((size_t)v->annot_page_count, sizeof(int));
+    if (!stroke_arrays || !n_per_page) { free(stroke_arrays); free(n_per_page); return; }
+
+    for (int pg = 0; pg < v->annot_page_count; pg++) {
+        PageAnnots *pa = &v->page_annots[pg];
+        if (pa->count == 0) { stroke_arrays[pg] = NULL; n_per_page[pg] = 0; continue; }
+
+        PdfInkStroke *sarr = malloc((size_t)pa->count * sizeof(PdfInkStroke));
+        if (!sarr) { stroke_arrays[pg] = NULL; n_per_page[pg] = 0; continue; }
+
+        for (int i = 0; i < pa->count; i++) {
+            AnnotSeg *s = &pa->segs[i];
+            sarr[i].nx0            = s->nx0;
+            sarr[i].ny0            = s->ny0;
+            sarr[i].nx1            = s->nx1;
+            sarr[i].ny1            = s->ny1;
+            sarr[i].thickness_norm = s->thickness;
+            sarr[i].r              = s->r;
+            sarr[i].g              = s->g;
+            sarr[i].b              = s->b;
+            sarr[i].type           = s->multiply ? 'H' : 'I';
         }
-        v->color_input_mode = 0;
-    } else if (ks == XK_Escape) {
-        v->color_input_mode = 0;
-    } else if (ks == XK_BackSpace) {
-        int sl = strlen(v->color_input_buf);
-        if (sl > 0) v->color_input_buf[sl - 1] = '\0';
-    } else if (len > 0 && buf[0] >= 32) {
-        int sl = strlen(v->color_input_buf);
-        if (sl + len < (int)sizeof(v->color_input_buf) - 1)
-            strcat(v->color_input_buf, buf);
+        stroke_arrays[pg] = sarr;
+        n_per_page[pg]    = pa->count;
     }
-}
 
-/* ------------------------------------------------------------------ */
-/* Pointer -> normalised page coordinates                               */
+    int rc = pdf_annot_save(v->doc,
+                            stroke_arrays, n_per_page,
+                            v->annot_page_count,
+                            v->filename);
 
-static int win_to_page_norm(Viewer *v, int wx, int wy, float *nx, float *ny)
-{
-    if (!v->pix || v->pix_w <= 0 || v->pix_h <= 0) return 0;
-    int bar_off = (v->bar_visible && topbar) ? v->bar_h : 0;
-    float px = (float)(wx - v->scroll_x);
-    float py = (float)(wy - v->scroll_y - bar_off);
-    *nx = px / (float)v->pix_w;
-    *ny = py / (float)v->pix_h;
-    return 1;
+    for (int pg = 0; pg < v->annot_page_count; pg++)
+        free((void*)stroke_arrays[pg]);
+    free(stroke_arrays);
+    free(n_per_page);
+
+    if (rc == 0)
+        fprintf(stderr, "sxbv: annotations saved to '%s'\n", v->filename);
+    else
+        fprintf(stderr, "sxbv: failed to save annotations to '%s'\n", v->filename);
 }
 
 /* ------------------------------------------------------------------ */
 /* Stroke capture                                                       */
 
+static int win_to_page_norm(Viewer *v, int wx, int wy, float *nx, float *ny)
+{
+    if (!v->pix || v->pix_w <= 0 || v->pix_h <= 0) return 0;
+    int bar_off = (v->bar_visible && topbar) ? v->bar_h : 0;
+    *nx = (float)(wx - v->scroll_x)            / (float)v->pix_w;
+    *ny = (float)(wy - v->scroll_y - bar_off)  / (float)v->pix_h;
+    return 1;
+}
+
 static void push_seg(Viewer *v, float nx0, float ny0, float nx1, float ny1)
 {
     if (v->page < 0 || v->page >= v->annot_page_count) return;
     PageAnnots *pa = &v->page_annots[v->page];
-
     if (pa->count == pa->cap) {
         int newcap = pa->cap ? pa->cap * 2 : 64;
         AnnotSeg *n = realloc(pa->segs, (size_t)newcap * sizeof(AnnotSeg));
         if (!n) return;
-        pa->segs = n;
-        pa->cap  = newcap;
+        pa->segs = n; pa->cap = newcap;
     }
-
     AnnotSeg *s = &pa->segs[pa->count++];
     s->nx0 = nx0; s->ny0 = ny0; s->nx1 = nx1; s->ny1 = ny1;
-    s->thickness = *cur_thick(v) / (float)v->pix_w;
+    s->thickness   = *cur_thick(v) / (float)v->pix_w;
     s->r = *cur_r(v); s->g = *cur_g(v); s->b = *cur_b(v);
-    s->alpha = (v->annot_mode == ANNOT_HIGHLIGHT) ? HIGHLIGHT_ALPHA : 255;
-    s->multiply = (v->annot_mode == ANNOT_HIGHLIGHT) ? 1 : 0;
+    s->alpha       = HIGHLIGHT_ALPHA;
+    s->multiply    = (v->annot_mode == ANNOT_HIGHLIGHT) ? 1 : 0;
     s->stroke_start = (unsigned char)v->stroke_pending_start;
     v->stroke_pending_start = 0;
+
+    /* New segment invalidates redo stack */
+    clear_redo(v);
 }
 
 void annot_button(Viewer *v, XButtonEvent *be, int press)
 {
     if (!annot_active(v) || v->mode == MODE_THUMB) return;
     if (be->button != Button1) return;
-
     if (press) {
         float nx, ny;
         if (!win_to_page_norm(v, be->x, be->y, &nx, &ny)) return;
         v->annot_drawing  = 1;
         v->annot_last_nx  = nx;
         v->annot_last_ny  = ny;
-        v->stroke_pending_start = 1;
-        /* dot on click-without-drag: zero-length segment still rasterises
-         * as a filled circle in annot_composite(). */
         push_seg(v, nx, ny, nx, ny);
         annot_composite_last_segment(v);
     } else {
         v->annot_drawing = 0;
+        v->stroke_pending_start = 1; /* next mousedown starts fresh stroke */
     }
 }
 
 void annot_motion(Viewer *v, XMotionEvent *me)
 {
-    v->ptr_x = me->x;
-    v->ptr_y = me->y;
-    v->have_pointer = 1;
-
+    v->ptr_x = me->x; v->ptr_y = me->y; v->have_pointer = 1;
     if (!annot_active(v) || !v->annot_drawing || v->mode == MODE_THUMB) return;
-
     float nx, ny;
     if (!win_to_page_norm(v, me->x, me->y, &nx, &ny)) return;
     push_seg(v, v->annot_last_nx, v->annot_last_ny, nx, ny);
@@ -293,34 +364,29 @@ void annot_motion(Viewer *v, XMotionEvent *me)
 }
 
 /* ------------------------------------------------------------------ */
-/* Compositing onto the rendered page                                   */
+/* Pixel blending                                                      */
 
-static inline void blend_px(unsigned int *px, unsigned char r, unsigned char g,
-                             unsigned char b, unsigned char a, int multiply)
+static inline void blend_px(unsigned int *px,
+                             unsigned char r, unsigned char g, unsigned char b,
+                             unsigned char a, int multiply)
 {
-    if (!multiply && a == 255) {
-        *px = ((unsigned int)r << 16) | ((unsigned int)g << 8) | b;
-        return;
-    }
     unsigned int old = *px;
-    unsigned int or_ = (old >> 16) & 0xff, og = (old >> 8) & 0xff, ob = old & 0xff;
+    unsigned int or_ = (old >> 16) & 0xff;
+    unsigned int og  = (old >>  8) & 0xff;
+    unsigned int ob  =  old        & 0xff;
 
-    unsigned int tr, tg, tb; /* blend target: multiplied color, or flat color */
+    unsigned int tr, tg, tb;
     if (multiply) {
-        /* Real highlighter behavior: saturates light/white background,
-         * leaves dark text close to untouched (base*color/255 stays
-         * near 0 when base is already dark) -- unlike a flat alpha-over
-         * blend, which washes out text too and reads as "watercolor". */
         tr = (or_ * r) / 255;
-        tg = (og * g) / 255;
-        tb = (ob * b) / 255;
+        tg = (og  * g) / 255;
+        tb = (ob  * b) / 255;
     } else {
+        if (a == 255) { *px = ((unsigned int)r<<16)|((unsigned int)g<<8)|b; return; }
         tr = r; tg = g; tb = b;
     }
-
     unsigned int nr = (tr * a + or_ * (255 - a)) / 255;
-    unsigned int ng = (tg * a + og * (255 - a)) / 255;
-    unsigned int nb = (tb * a + ob * (255 - a)) / 255;
+    unsigned int ng = (tg * a + og  * (255 - a)) / 255;
+    unsigned int nb = (tb * a + ob  * (255 - a)) / 255;
     *px = (nr << 16) | (ng << 8) | nb;
 }
 
@@ -332,155 +398,113 @@ static void raster_thick_segment(unsigned int *buf, int w, int h,
                                   unsigned char *touched)
 {
     if (half_thick < 0.5f) half_thick = 0.5f;
-
-    int minx = (int)floorf(fminf(x0, x1) - half_thick);
-    int maxx = (int)ceilf (fmaxf(x0, x1) + half_thick);
-    int miny = (int)floorf(fminf(y0, y1) - half_thick);
-    int maxy = (int)ceilf (fmaxf(y0, y1) + half_thick);
-
-    if (minx < 0) minx = 0;
-    if (miny < 0) miny = 0;
-    if (maxx > w) maxx = w;
-    if (maxy > h) maxy = h;
+    int minx = (int)floorf(fminf(x0,x1) - half_thick);
+    int maxx = (int)ceilf (fmaxf(x0,x1) + half_thick);
+    int miny = (int)floorf(fminf(y0,y1) - half_thick);
+    int maxy = (int)ceilf (fmaxf(y0,y1) + half_thick);
+    if (minx < 0) minx = 0;  if (miny < 0) miny = 0;
+    if (maxx > w) maxx = w;  if (maxy > h) maxy = h;
     if (minx >= maxx || miny >= maxy) return;
 
     float dx = x1 - x0, dy = y1 - y0;
-    float len2 = dx * dx + dy * dy;
-    float ht2 = half_thick * half_thick;
+    float len2 = dx*dx + dy*dy;
+    float ht2  = half_thick * half_thick;
 
     for (int y = miny; y < maxy; y++) {
-        unsigned int *row = buf + (size_t)y * w;
+        unsigned int  *row  = buf     + (size_t)y * w;
         unsigned char *trow = touched ? touched + (size_t)y * w : NULL;
         for (int x = minx; x < maxx; x++) {
-            float px = x + 0.5f, py = y + 0.5f;
-            float dist2;
+            float px = x + 0.5f, py = y + 0.5f, dist2;
             if (len2 < 1e-6f) {
-                float ex = px - x0, ey = py - y0;
-                dist2 = ex * ex + ey * ey;
+                float ex = px-x0, ey = py-y0; dist2 = ex*ex + ey*ey;
             } else {
-                float t = ((px - x0) * dx + (py - y0) * dy) / len2;
-                if (t < 0.0f) t = 0.0f;
-                if (t > 1.0f) t = 1.0f;
-                float cx = x0 + t * dx, cy = y0 + t * dy;
-                float ex = px - cx, ey = py - cy;
-                dist2 = ex * ex + ey * ey;
+                float t = ((px-x0)*dx + (py-y0)*dy) / len2;
+                if (t < 0.0f) t = 0.0f; if (t > 1.0f) t = 1.0f;
+                float cx = x0+t*dx, cy = y0+t*dy;
+                float ex = px-cx,   ey = py-cy; dist2 = ex*ex + ey*ey;
             }
             if (dist2 <= ht2) {
-                /* Coverage semantics, not accumulation: once this
-                 * stroke has colored a pixel, going over it again
-                 * (e.g. a scribble crossing itself) must not darken it
-                 * further -- that's what real highlighters/browser
-                 * text-highlight do, and what made overlaps look
-                 * patchy instead of a uniform solid color. */
-                if (trow) {
-                    if (trow[x]) continue;
-                    trow[x] = 1;
-                }
+                if (trow) { if (trow[x]) continue; trow[x] = 1; }
                 blend_px(&row[x], r, g, b, a, multiply);
             }
         }
     }
 }
 
-static void composite_seg(unsigned int *buf, int w, int h, const AnnotSeg *s,
-                           unsigned char *touched)
+static void composite_seg(unsigned int *buf, int w, int h,
+                           const AnnotSeg *s, unsigned char *touched)
 {
-    float x0 = s->nx0 * (float)w, y0 = s->ny0 * (float)h;
-    float x1 = s->nx1 * (float)w, y1 = s->ny1 * (float)h;
+    float x0   = s->nx0 * (float)w, y0 = s->ny0 * (float)h;
+    float x1   = s->nx1 * (float)w, y1 = s->ny1 * (float)h;
     float half = (s->thickness * (float)w) / 2.0f;
-    raster_thick_segment(buf, w, h, x0, y0, x1, y1, half, s->r, s->g, s->b, s->alpha,
-                          s->multiply, s->multiply ? touched : NULL);
+    raster_thick_segment(buf, w, h, x0, y0, x1, y1, half,
+                         s->r, s->g, s->b, s->alpha, s->multiply,
+                         s->multiply ? touched : NULL);
 }
+
+/* ------------------------------------------------------------------ */
+/* Full and incremental compositing                                     */
 
 void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h)
 {
     if (!bgrx) return;
     if (v->page < 0 || v->page >= v->annot_page_count) return;
-
     PageAnnots *pa = &v->page_annots[v->page];
     if (pa->count == 0) return;
 
     /* One global coverage mask for the entire highlight layer on this
-     * page. A pixel that has been multiplied by ANY highlight stroke is
-     * marked touched and skipped by every subsequent one -- this is
-     * what real highlighters and browser text-highlight do: overlapping
-     * the same region again produces the same solid color, not a darker
-     * compounded result. The mask is NOT reset between strokes.
-     * Pencil segments (multiply==0) ignore the mask entirely. */
+     * page. Never reset between strokes -- overlapping highlights stay
+     * the same color (no compounding darkening). */
     unsigned char *touched = calloc((size_t)w * h, 1);
-
-    unsigned int *buf = (unsigned int *)bgrx;
+    unsigned int  *buf     = (unsigned int *)bgrx;
     for (int i = 0; i < pa->count; i++)
         composite_seg(buf, w, h, &pa->segs[i], touched);
-
     free(touched);
 }
 
-/* Full rebuild: re-converts the current page to BGRX and replays every
- * stored segment onto it. This is O(page pixels + total segments) and
- * is only called when the *base* image changes (new page rendered,
- * zoom/rotate change) or when a stroke is removed (undo) -- never on
- * every mouse-move. */
 void annot_rebuild(Viewer *v)
 {
     free(v->annot_bgrx);
-    v->annot_bgrx   = NULL;
-    v->annot_bgrx_w = 0;
-    v->annot_bgrx_h = 0;
-
+    v->annot_bgrx = NULL;
+    v->annot_bgrx_w = v->annot_bgrx_h = 0;
     if (!v->pix) return;
-
     unsigned char *base = to_bgrx(v);
     if (!base) return;
-
     v->annot_bgrx   = base;
     v->annot_bgrx_w = v->pix_w;
     v->annot_bgrx_h = v->pix_h;
-
-    /* Invalidate the live touched mask -- the full replay below will
-     * build fresh coverage from scratch, and subsequent live segments
-     * need to start from that same state, not the previous page's mask. */
-    if (v->stroke_touched) {
-        memset(v->stroke_touched, 0,
-               (size_t)v->stroke_touched_w * v->stroke_touched_h);
-        v->stroke_touched_w = 0; /* force realloc to new page size */
-        v->stroke_touched_h = 0;
-    }
-
+    /* Invalidate live mask so it rebuilds at correct page size */
+    v->stroke_touched_w = v->stroke_touched_h = 0;
     annot_composite(v, v->annot_bgrx, v->annot_bgrx_w, v->annot_bgrx_h);
-}
-
-/* Ensure the per-page highlight coverage mask matches the current page
- * size. Never reset between strokes -- the whole point is that any
- * pixel already multiplied by a previous stroke on this page is skipped
- * by every subsequent one (same behavior as full rebuild). The mask is
- * only cleared by annot_rebuild() when the base image changes. */
-static unsigned char *stroke_touched_for(Viewer *v)
-{
-    if (v->stroke_touched_w != v->annot_bgrx_w || v->stroke_touched_h != v->annot_bgrx_h) {
+    /* Sync the live mask to match the state after the full replay */
+    if (v->stroke_touched) {
         free(v->stroke_touched);
-        v->stroke_touched = calloc((size_t)v->annot_bgrx_w * v->annot_bgrx_h, 1);
-        v->stroke_touched_w = v->annot_bgrx_w;
-        v->stroke_touched_h = v->annot_bgrx_h;
+        v->stroke_touched = NULL;
     }
-    return v->stroke_touched;
 }
 
-/* Incremental update: blend just the most-recently-added segment onto
- * the already-cached composited buffer. O(that segment's bounding
- * box) -- this is what keeps drawing responsive regardless of how
- * many segments a page already has or how high the zoom is. */
 void annot_composite_last_segment(Viewer *v)
 {
     if (!v->annot_bgrx) return;
     if (v->page < 0 || v->page >= v->annot_page_count) return;
-
     PageAnnots *pa = &v->page_annots[v->page];
     if (pa->count == 0) return;
-
     AnnotSeg *s = &pa->segs[pa->count - 1];
-    unsigned char *touched = s->multiply ? stroke_touched_for(v) : NULL;
-    composite_seg((unsigned int *)v->annot_bgrx, v->annot_bgrx_w, v->annot_bgrx_h, s, touched);
+
+    unsigned char *touched = NULL;
+    if (s->multiply) {
+        /* Reuse or allocate the persistent live mask */
+        int w = v->annot_bgrx_w, h = v->annot_bgrx_h;
+        if (!v->stroke_touched || v->stroke_touched_w != w || v->stroke_touched_h != h) {
+            free(v->stroke_touched);
+            v->stroke_touched   = calloc((size_t)w * h, 1);
+            v->stroke_touched_w = w;
+            v->stroke_touched_h = h;
+        }
+        touched = v->stroke_touched;
+    }
+    composite_seg((unsigned int *)v->annot_bgrx,
+                  v->annot_bgrx_w, v->annot_bgrx_h, s, touched);
 }
 
 /* ------------------------------------------------------------------ */
@@ -489,7 +513,6 @@ void annot_composite_last_segment(Viewer *v)
 void annot_draw_cursor(Viewer *v, Drawable dst)
 {
     if (!annot_active(v) || !v->have_pointer || v->mode == MODE_THUMB) return;
-
     float thick_px = *cur_thick(v);
     int radius = (int)(thick_px / 2.0f);
     if (radius < 1) radius = 1;
@@ -497,18 +520,10 @@ void annot_draw_cursor(Viewer *v, Drawable dst)
     XColor ring;
     XParseColor(v->dpy, v->cmap, ANNOT_CURSOR_RING_COLOR, &ring);
     XAllocColor(v->dpy, v->cmap, &ring);
-
-    GC gc = v->gc;
-    unsigned long saved_fg = 0; /* GC has no query in Xlib without XGetGCValues; use dedicated calls */
-    (void)saved_fg;
-
-    XSetForeground(v->dpy, gc, ring.pixel);
-    XDrawArc(v->dpy, dst, gc,
-              v->ptr_x - radius, v->ptr_y - radius,
-              radius * 2, radius * 2, 0, 360 * 64);
-
-    /* Small filled dot at the true center so thin strokes are still
-     * easy to place precisely. */
-    XFillArc(v->dpy, dst, gc,
-              v->ptr_x - 1, v->ptr_y - 1, 2, 2, 0, 360 * 64);
+    XSetForeground(v->dpy, v->gc, ring.pixel);
+    XDrawArc(v->dpy, dst, v->gc,
+             v->ptr_x - radius, v->ptr_y - radius,
+             radius * 2, radius * 2, 0, 360 * 64);
+    XFillArc(v->dpy, dst, v->gc,
+             v->ptr_x - 1, v->ptr_y - 1, 2, 2, 0, 360 * 64);
 }

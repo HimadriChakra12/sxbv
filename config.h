@@ -44,47 +44,47 @@ static const int show_fullscreen_indicator = 0;
 #define MAX_SEARCH        256
 #define WIN_SCREEN_FRAC   0.667f
 
-/* ---- Annotation tools: pencil (opaque) & highlighter (translucent) ---- */
+/* ---- Annotation tools: pencil (opaque) & highlighter (multiply) ---- */
 
-/* Exactly 5 presets, selectable by pressing 1-5 while a tool is active
- * (also cycled with '[' / ']'). Accepts any X11 color name or
- * "#rrggbb" hex string. Keep this at 5 entries -- the 1-5 keys map
- * directly to slots 0-4. */
-static const char *annot_palette[] = {
-    "#ffff98",  /* 1: yellow (matches the ringed/default swatch in your screenshot) */
-    "#53ffbc",  /* 2: green  */
-    "#80ebff",  /* 3: cyan   */
-    "#ffcbe6",  /* 4: pink   */
-    "#ff4f5f",  /* 5: red    */
+/* Highlighter palette: exactly 5 slots, select with 1-5 while in
+ * highlight mode, cycle with [ / ]. */
+static const char *highlight_palette[] = {
+    "#ffff98",  /* 1: yellow  (default, slot 0) */
+    "#53ffbc",  /* 2: green   */
+    "#80ebff",  /* 3: cyan    */
+    "#ffcbe6",  /* 4: pink    */
+    "#ff4f5f",  /* 5: red     */
 };
-#define ANNOT_PALETTE_LEN ((int)(sizeof(annot_palette) / sizeof(annot_palette[0])))
+#define HIGHLIGHT_PALETTE_LEN ((int)(sizeof(highlight_palette)/sizeof(highlight_palette[0])))
+#define HIGHLIGHT_DEFAULT_PRESET 0   /* index into highlight_palette */
 
-/* Default preset (index into annot_palette above, 0-based) each tool
- * starts on. Highlighter starts on yellow (slot 0); pencil starts on
- * red (slot 4). Change these to start on a different preset. */
-#define HIGHLIGHT_DEFAULT_PRESET 0
-#define PENCIL_DEFAULT_PRESET    4
+/* Pencil palette: up to 10 slots, select with 1-0 while in pencil
+ * mode, cycle with [ / ]. */
+static const char *pencil_palette[] = {
+    "#ff4f5f",  /* 1: red     (default, slot 0) */
+    "#ffffff",  /* 2: white   */
+    "#000000",  /* 3: black   */
+    "#fabd2f",  /* 4: amber   */
+    "#83a598",  /* 5: teal    */
+    "#d3869b",  /* 6: mauve   */
+    "#8ec07c",  /* 7: sage    */
+    "#fe8019",  /* 8: orange  */
+    "#b8bb26",  /* 9: lime    */
+    "#83c07c",  /* 0: mint    */
+};
+#define PENCIL_PALETTE_LEN ((int)(sizeof(pencil_palette)/sizeof(pencil_palette[0])))
+#define PENCIL_DEFAULT_PRESET 0      /* index into pencil_palette */
 
-/* Thickness is stored normalised to page width, so strokes stay visually
- * consistent across zoom levels. These defaults are in pixels at the
- * zoom level active when a document is first opened. */
+/* Thickness defaults (pixels at default zoom) */
 #define PENCIL_DEFAULT_THICKNESS     3.0f
 #define HIGHLIGHT_DEFAULT_THICKNESS 18.0f
 #define ANNOT_THICK_MIN    1.0f
 #define ANNOT_THICK_MAX   80.0f
 #define ANNOT_THICK_STEP   1.0f
 
-/* Highlighter blend strength, 0 (no effect) - 255 (fully multiplied).
- * The highlighter uses a multiply blend (like a real marker): it
- * saturates the light page background while leaving dark text mostly
- * untouched, instead of washing everything toward a flat color like a
- * plain alpha-over blend would (that's what read as "watercolor").
- * This is left at full strength (255) on purpose -- a real highlighter
- * band is essentially solid color over paper, not a faded tint; the
- * multiply blend itself (not this value) is what keeps text readable
- * underneath, so turning this down just makes the *background* paler
- * without helping text legibility. Lower it only if you want a
- * deliberately faint/translucent look. */
+/* Highlighter blend strength: leave at 255 (full multiply).
+ * Lowering it makes the background paler without helping text
+ * readability -- the multiply blend itself handles text preservation. */
 #define HIGHLIGHT_ALPHA 255
 
 /* Outline color of the thickness-preview ring around the cursor. */
@@ -110,8 +110,6 @@ static const char *annot_palette[] = {
     BIND(XK_plus,      0,           CMD_ZOOM_IN)             \
     BIND(XK_equal,     0,           CMD_ZOOM_IN)             \
     BIND(XK_minus,     0,           CMD_ZOOM_OUT)            \
-    BIND(XK_0,         0,           CMD_ZOOM_RESET)          \
-    BIND(XK_w,         0,           CMD_FIT_WIDTH)           \
     BIND(XK_e,         0,           CMD_FIT_HEIGHT)          \
     BIND(XK_f,         0,           CMD_FIT_PAGE)            \
     BIND(XK_r,         0,           CMD_ROTATE_CW)           \
@@ -137,5 +135,6 @@ static const char *annot_palette[] = {
     BIND(XK_bracketright, 0,        CMD_ANNOT_COLOR_NEXT)    \
     BIND(XK_comma,     ShiftMask,   CMD_ANNOT_THICK_DEC)     \
     BIND(XK_period,    ShiftMask,   CMD_ANNOT_THICK_INC)     \
-    BIND(XK_c,         ShiftMask,   CMD_ANNOT_COLOR_INPUT)   \
-    BIND(XK_u,         ControlMask, CMD_ANNOT_UNDO)
+    BIND(XK_u,         0,           CMD_ANNOT_UNDO)          \
+    BIND(XK_r,         ControlMask, CMD_ANNOT_REDO)          \
+    BIND(XK_w,         0,           CMD_ANNOT_SAVE)

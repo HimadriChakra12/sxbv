@@ -8,6 +8,11 @@ ORANGE = \033[38;5;208m
 BLUE   = \033[1;34m
 RESET  = \033[0m
 
+# Total compilation units (sxbv sources + poppler sources)
+TOTAL_OBJS := $(words $(OBJS) $(POPOBJ))
+# Width for the counter column (number of digits in TOTAL_OBJS)
+CTR_W      := $(shell printf "%s" "$(TOTAL_OBJS)" | wc -c | tr -d ' ')
+
 pretty = $(patsubst include/poppler-src%,POP%,$1)
 
 define compile_c
@@ -16,12 +21,14 @@ define compile_c
 	t1=$$(date +%s%N); ms=$$(( (t1 - t0) / 1000000 )); \
 	( \
 		flock -w 10 200; \
+		n=$$(( $$(cat /tmp/.sxbv-count 2>/dev/null || echo 0) + 1 )); \
+		printf "%d" $$n > /tmp/.sxbv-count; \
 		if [ $$rc -eq 0 ]; then \
-			printf "$(GREEN)%-8s$(RESET) $(BOLD)%-55s$(RESET) %-55s\t$(CYAN)%dms$(RESET)\n" \
-				"$(CC)" "$(call pretty,$<)" "$(call pretty,$@)" "$$ms"; \
+			printf "$(DIM)[%$(CTR_W)d/$(TOTAL_OBJS)]$(RESET) $(GREEN)%-8s$(RESET) $(BOLD)%-55s$(RESET) %-55s\t$(CYAN)%dms$(RESET)\n" \
+				"$$n" "$(CC)" "$(call pretty,$<)" "$(call pretty,$@)" "$$ms"; \
 		else \
-			printf "$(GREEN)%-8s$(RESET) $(BOLD)%-55s$(RESET) FAILED\t$(CYAN)%dms$(RESET)\n" \
-				"$(CC)" "$(call pretty,$<)" "$$ms"; \
+			printf "$(DIM)[%$(CTR_W)d/$(TOTAL_OBJS)]$(RESET) $(GREEN)%-8s$(RESET) $(BOLD)%-55s$(RESET) FAILED\t$(CYAN)%dms$(RESET)\n" \
+				"$$n" "$(CC)" "$(call pretty,$<)" "$$ms"; \
 			printf "%s\n" "$$out"; \
 		fi \
 	) 200>/tmp/.sxbv-build.lock; \
@@ -34,12 +41,14 @@ define compile_cxx
 	t1=$$(date +%s%N); ms=$$(( (t1 - t0) / 1000000 )); \
 	( \
 		flock -w 10 200; \
+		n=$$(( $$(cat /tmp/.sxbv-count 2>/dev/null || echo 0) + 1 )); \
+		printf "%d" $$n > /tmp/.sxbv-count; \
 		if [ $$rc -eq 0 ]; then \
-			printf "$(BLUE)%-8s$(RESET) $(BOLD)%-55s$(RESET) %-55s\t$(CYAN)%dms$(RESET)\n" \
-				"$(CXX)" "$(call pretty,$<)" "$(call pretty,$@)" "$$ms"; \
+			printf "$(DIM)[%$(CTR_W)d/$(TOTAL_OBJS)]$(RESET) $(BLUE)%-8s$(RESET) $(BOLD)%-55s$(RESET) %-55s\t$(CYAN)%dms$(RESET)\n" \
+				"$$n" "$(CXX)" "$(call pretty,$<)" "$(call pretty,$@)" "$$ms"; \
 		else \
-			printf "$(BLUE)%-8s$(RESET) $(BOLD)%-55s$(RESET) FAILED\t$(CYAN)%dms$(RESET)\n" \
-				"$(CXX)" "$(call pretty,$<)" "$$ms"; \
+			printf "$(DIM)[%$(CTR_W)d/$(TOTAL_OBJS)]$(RESET) $(BLUE)%-8s$(RESET) $(BOLD)%-55s$(RESET) FAILED\t$(CYAN)%dms$(RESET)\n" \
+				"$$n" "$(CXX)" "$(call pretty,$<)" "$$ms"; \
 			printf "%s\n" "$$out"; \
 		fi \
 	) 200>/tmp/.sxbv-build.lock; \
@@ -48,7 +57,7 @@ endef
 
 define link_bin
 	@t=$$(date +%s%N); \
-	printf "$(GREEN)link$(RESET)   $(BOLD)$@$(RESET) %-111s"; \
+	printf "$(DIM)[link]$(RESET)         $(BOLD)$@$(RESET) %-111s"; \
 	$(CXX) $(LDFLAGS) $(OBJS) $(LIBS) -o $@ ; \
 	rc=$$?; \
 	ms=$$(( ($$(date +%s%N) - t) / 1000000 )); \
@@ -57,10 +66,13 @@ endef
 
 .PHONY: all bench clean distclean install uninstall
 
-all: sxbv
+all: _reset_counter sxbv
+
+_reset_counter:
+	@printf "0" > /tmp/.sxbv-count
 
 $(POPLIB): $(POPOBJ)
-	@printf "$(GREEN)ar$(RESET)     $(BOLD)$@$(RESET)\n"
+	@printf "$(DIM)[ar]$(RESET)           $(BOLD)$@$(RESET)\n"
 	@$(AR) rcs $@ $^
 
 $(POPPLER)/%.o: $(POPPLER)/%.cc

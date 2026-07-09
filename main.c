@@ -7,12 +7,54 @@
 /* ------------------------------------------------------------------ */
 static const char *expand_path(const char *path)
 {
-    if (path[0] != '~') return path;
-    const char *home = getenv("HOME");
-    if (!home) return path;
     static char buf[4096];
-    snprintf(buf, sizeof buf, "%s%s", home, path + 1);
-    return buf;
+
+    /* Fast path: nothing to expand */
+    if (path[0] != '~' && !strchr(path, '$'))
+        return path;
+
+    /* ~ expansion */
+    const char *src = path;
+    if (src[0] == '~') {
+        const char *home = getenv("HOME");
+        if (home) {
+            snprintf(buf, sizeof buf, "%s%s", home, src + 1);
+            src = buf;
+        }
+    }
+
+    /* $VAR / ${VAR} expansion: only if a $ is present */
+    if (!strchr(src, '$'))
+        return src;
+
+    static char out[4096];
+    char *d = out;
+    char *end = out + sizeof(out) - 1;
+    const char *s = src;
+    while (*s && d < end) {
+        if (*s != '$') { *d++ = *s++; continue; }
+        s++; /* skip $ */
+        /* ${VAR} or $VAR */
+        int braced = (*s == '{');
+        if (braced) s++;
+        char var[256]; int vl = 0;
+        while (*s && vl < (int)sizeof(var)-1 &&
+               ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') ||
+                (*s >= '0' && *s <= '9') || *s == '_')) {
+            var[vl++] = *s++;
+        }
+        var[vl] = '\0';
+        if (braced && *s == '}') s++;
+        const char *val = vl ? getenv(var) : NULL;
+        if (val) {
+            size_t vlen = strlen(val);
+            if (d + vlen > end) vlen = (size_t)(end - d);
+            memcpy(d, val, vlen);
+            d += vlen;
+        }
+    }
+    *d = '\0';
+    return out;
 }
 /* Helpers                                                              */
 void clamp_scroll(Viewer *v)
@@ -312,8 +354,9 @@ static void run_command(Viewer *v, Command cmd, int cnt)
         case CMD_ANNOT_COLOR_NEXT: annot_color_cycle(v,  1); break;
         case CMD_ANNOT_THICK_DEC:  annot_thickness_adjust(v, -ANNOT_THICK_STEP * cnt); break;
         case CMD_ANNOT_THICK_INC:  annot_thickness_adjust(v,  ANNOT_THICK_STEP * cnt); break;
-        case CMD_ANNOT_COLOR_INPUT: annot_color_input_start(v); break;
         case CMD_ANNOT_UNDO: annot_undo(v); break;
+        case CMD_ANNOT_REDO: annot_redo(v); break;
+        case CMD_ANNOT_SAVE: annot_save(v); return; /* no redraw needed */
         case CMD_QUIT:
             exit(0);
         default:
@@ -333,20 +376,23 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
         handle_search_key(v, ks, buf, len);
         return;
     }
-    if (v->color_input_mode) {
-        annot_color_input_key(v, ks, buf, len);
-        win_draw(v);
-        return;
-    }
 
-    /* While a tool is active, bare 1-5 pick a palette preset directly
-     * instead of accumulating as a numeric prefix (which only makes
-     * sense for movement/paging commands, not while drawing). */
-    if (annot_active(v) && !(ke->state & (ControlMask | ShiftMask)) &&
-        ks >= XK_1 && ks <= XK_5) {
-        annot_select_preset(v, (int)(ks - XK_1));
-        win_draw(v);
-        return;
+    /* While a tool is active, number keys pick palette presets directly.
+     * Highlight: 1-5 (5 colors). Pencil: 1-9 plus 0 for slot 9 (10 colors).
+     * This intercepts before the normal numeric-prefix accumulation. */
+    if (annot_active(v) && !(ke->state & (ControlMask | ShiftMask))) {
+        if (v->annot_mode == ANNOT_HIGHLIGHT && ks >= XK_1 && ks <= XK_5) {
+            annot_select_preset(v, (int)(ks - XK_1));
+            win_draw(v);
+            return;
+        }
+        if (v->annot_mode == ANNOT_PENCIL &&
+            ((ks >= XK_1 && ks <= XK_9) || ks == XK_0)) {
+            int idx = (ks == XK_0) ? 9 : (int)(ks - XK_1);
+            annot_select_preset(v, idx);
+            win_draw(v);
+            return;
+        }
     }
 
     /* Accumulate numeric prefix (e.g. 5j = scroll 5 lines) */
@@ -408,13 +454,13 @@ static void usage(const char *prog)
         "  Ctrl+scroll       zoom\n"
         "\n"
         "Annotation tools:\n"
-        "  Ctrl+h            toggle highlighter\n"
-        "  Ctrl+p            toggle pencil\n"
-        "  [  ]              previous/next palette color\n"
-        "  1-5               jump directly to preset color 1-5\n"
+        "  Ctrl+h/p          toggle highlighter / pencil\n"
+        "  [  ]              cycle palette color\n"
+        "  1-5               highlighter preset (1-5)\n"
+        "  1-0               pencil preset (1-9, 0=slot10)\n"
         "  <  >              decrease/increase thickness\n"
-        "  Shift+C           type a custom color (name or #rrggbb)\n"
-        "  Ctrl+u            undo last stroke segment (repeat for more)\n",
+        "  u / Ctrl+r        undo / redo stroke\n"
+        "  w                 save annotations to .annot file\n",
         prog);
 }
 
@@ -485,9 +531,24 @@ int main(int argc, char **argv)
     if (is_dir) {
         v.mode = MODE_THUMB;
         thumb_init_dir(&v, v.filename);
-        thumb_draw(&v);
         if (opt_fs || startfullscreen)
             win_toggle_fullscreen(&v);
+        /* Pump X events until we get a ConfigureNotify so win_w/win_h
+         * are set before the first thumb_draw. Without this, win_w=0
+         * causes XCreatePixmap(w=0,h=0) → X protocol error → segfault. */
+        XEvent ev_init;
+        while (v.win_w == 0 || v.win_h == 0) {
+            XNextEvent(v.dpy, &ev_init);
+            if (ev_init.type == ConfigureNotify) {
+                v.win_w = ev_init.xconfigure.width;
+                v.win_h = ev_init.xconfigure.height;
+                /* Recompute thumb cols now that we have real dimensions */
+                v.thumb_cols = v.win_w / (v.thumb_w + THUMB_PADDING);
+                if (v.thumb_cols < 1) v.thumb_cols = 1;
+                thumb_scroll_to_sel(&v);
+            }
+        }
+        thumb_draw(&v);
     } else {
         if (opt_fs || startfullscreen)
             win_toggle_fullscreen(&v);

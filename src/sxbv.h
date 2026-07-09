@@ -62,8 +62,9 @@ typedef enum {
     CMD_TOGGLE_HIGHLIGHT, CMD_TOGGLE_PENCIL,
     CMD_ANNOT_COLOR_PREV, CMD_ANNOT_COLOR_NEXT,
     CMD_ANNOT_THICK_DEC,  CMD_ANNOT_THICK_INC,
-    CMD_ANNOT_COLOR_INPUT,
     CMD_ANNOT_UNDO,
+    CMD_ANNOT_REDO,
+    CMD_ANNOT_SAVE,
 
     CMD_QUIT,
 } Command;
@@ -230,44 +231,39 @@ typedef struct {
 
     float pencil_thickness;
     unsigned char pencil_r, pencil_g, pencil_b;
-    int pencil_palette_idx;
+    int pencil_palette_idx;      /* index into pencil_palette[]    */
 
     float highlight_thickness;
     unsigned char highlight_r, highlight_g, highlight_b;
-    int highlight_palette_idx;
+    int highlight_palette_idx;   /* index into highlight_palette[] */
 
-    PageAnnots *page_annots;     /* one entry per page   */
-    int         annot_page_count; /* size of page_annots  */
+    PageAnnots *page_annots;      /* one entry per page             */
+    int         annot_page_count;
 
-    /* Persistent cache: current page's pixels, pre-converted to BGRX,
-     * with all of that page's strokes already blended in. Rebuilt in
-     * full only when the base image changes (page/zoom/rotate) or a
-     * stroke is removed; updated incrementally (just the new
-     * segment's bbox) while actively drawing. This is what keeps
-     * drawing responsive -- see annot_rebuild()/annot_composite_last_segment(). */
+    /* Redo stack: segments popped by undo are pushed here;
+     * redo re-pushes them back onto page_annots. Cleared whenever a
+     * new stroke segment is added (same semantics as every editor). */
+    AnnotSeg   *redo_stack;
+    int         redo_count;
+    int         redo_cap;
+    int         redo_page;       /* page the redo stack belongs to */
+
+    /* Persistent composited-buffer cache */
     unsigned char *annot_bgrx;
     int annot_bgrx_w, annot_bgrx_h;
 
-    int   annot_drawing;         /* button currently held while drawing */
+    int   annot_drawing;
     float annot_last_nx, annot_last_ny;
 
-    /* Per-stroke coverage mask: tracks which pixels the *current*
-     * stroke has already colored, so a self-crossing scribble doesn't
-     * re-blend (and darken) pixels it's already covered. Reset at the
-     * start of each new stroke; replay during a full rebuild uses the
-     * same reset points (AnnotSeg.stroke_start) so the result after a
-     * zoom/rotate matches what was shown live while drawing. */
+    /* Per-page highlight coverage mask (never reset between strokes) */
     unsigned char *stroke_touched;
     int stroke_touched_w, stroke_touched_h;
-    int stroke_pending_start;    /* next segment pushed starts a new stroke */
+    int stroke_pending_start;
 
-    int have_pointer;            /* pointer position known this session */
-    int ptr_x, ptr_y;            /* last pointer position, window coords */
+    int have_pointer;
+    int ptr_x, ptr_y;
 
-    int  color_input_mode;
-    char color_input_buf[64];
-
-    int bar_forced;              /* bar was auto-shown by entering an annot mode */
+    int bar_forced;
 } Viewer;
 
 /* ------------------------------------------------------------------ */
@@ -303,38 +299,25 @@ void thumb_render_next(Viewer *v);
 void thumb_scroll_to_sel(Viewer *v);
 
 /* annotate.c */
-void annot_config_defaults(Viewer *v);   /* call once, after win_init() */
-void annot_init(Viewer *v);              /* (re)allocate per-page storage */
+void annot_config_defaults(Viewer *v);
+void annot_init(Viewer *v);
 void annot_free_all(Viewer *v);
-int  annot_active(Viewer *v);            /* mode != ANNOT_NONE */
+int  annot_active(Viewer *v);
 
 void annot_toggle(Viewer *v, AnnotMode m);
 void annot_color_cycle(Viewer *v, int dir);
-void annot_select_preset(Viewer *v, int idx); /* direct pick, 0-based index into annot_palette */
+void annot_select_preset(Viewer *v, int idx);
 void annot_thickness_adjust(Viewer *v, float d);
 void annot_undo(Viewer *v);
-
-void annot_color_input_start(Viewer *v);
-void annot_color_input_key(Viewer *v, KeySym ks, const char *buf, int len);
+void annot_redo(Viewer *v);
+void annot_save(Viewer *v);
 
 void annot_button(Viewer *v, XButtonEvent *be, int press);
 void annot_motion(Viewer *v, XMotionEvent *me);
 
-/* Blend this page's strokes into a BGRX (0x00RRGGBB words) pixel buffer
- * of the given dimensions, matching to_bgrx()'s output format. */
 void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h);
-
-/* Full rebuild of v->annot_bgrx from v->pix + all stored segments.
- * Call after render_page() (page/zoom/rotate changed) and after undo. */
 void annot_rebuild(Viewer *v);
-
-/* Incremental: blend only the most-recently-added segment onto the
- * already-cached v->annot_bgrx. Call right after adding a segment
- * while actively drawing. */
 void annot_composite_last_segment(Viewer *v);
-
-/* Draw the thickness-preview ring around the last known pointer
- * position, when in pencil/highlight mode. */
 void annot_draw_cursor(Viewer *v, Drawable dst);
 
 #endif /* SXBV_H */

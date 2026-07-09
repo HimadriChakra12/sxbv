@@ -140,6 +140,40 @@ int pdf_search_page(PdfDoc *doc, int page_num,
                     const char *needle,
                     PdfRect *out, int max_hits);
 
+/* ------------------------------------------------------------------ */
+/* Annotation saving                                                   */
+/* ------------------------------------------------------------------ */
+
+/*
+ * PdfInkStroke -- one continuous ink path on a page.
+ * Endpoints are in normalized page coordinates (0..1), same space used
+ * by sxbv's AnnotSeg.  pdf_annot_save() converts to PDF point space.
+ *
+ * type: 'I' = ink (pencil, opaque), 'H' = highlight (multiply).
+ * r,g,b: 0-255.  thickness_norm: fraction of page width (as stored in AnnotSeg).
+ */
+typedef struct {
+    float nx0, ny0, nx1, ny1; /* endpoints, 0..1 range  */
+    float thickness_norm;     /* fraction of page width */
+    unsigned char r, g, b;
+    char type;                /* 'I' ink, 'H' highlight */
+} PdfInkStroke;
+
+/*
+ * pdf_annot_save() -- write all strokes as Ink/Highlight PDF annotations
+ * and save the document to out_path (may equal the original path for
+ * an in-place incremental update, or a new path).
+ *
+ * strokes[i] is an array of PdfInkStroke for page i (0-based).
+ * n_per_page[i] is the count for that page.
+ * Returns 0 on success, -1 on error.
+ */
+int pdf_annot_save(PdfDoc *doc,
+                   const PdfInkStroke **strokes,
+                   const int *n_per_page,
+                   int page_count,
+                   const char *out_path);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

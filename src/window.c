@@ -105,9 +105,7 @@ static void draw_bar_to(Viewer *v, Drawable dst)
                      v->show_fullpath ? path : name);
         }
     } else {
-        if (v->color_input_mode) {
-            snprintf(left, sizeof left, "Color: %s", v->color_input_buf);
-        } else if (v->search_mode) {
+        if (v->search_mode) {
             snprintf(left, sizeof left, "/ %s", v->search_buf);
         } else if (v->hit_count > 0) {
             snprintf(left, sizeof left, "match %d/%d  %s",
@@ -169,10 +167,14 @@ static void draw_bar_to(Viewer *v, Drawable dst)
         if (v->show_fullscreen_indicator && v->fullscreen)
             strcat(right, "[FS]");
         if (v->annot_mode == ANNOT_PENCIL) {
-            snprintf(tmp, sizeof tmp, "[PENCIL %.0fpx]  ", v->pencil_thickness);
+            snprintf(tmp, sizeof tmp, "[P #%02x%02x%02x %.0fpx]  ",
+                     v->pencil_r, v->pencil_g, v->pencil_b,
+                     v->pencil_thickness);
             strcat(right, tmp);
         } else if (v->annot_mode == ANNOT_HIGHLIGHT) {
-            snprintf(tmp, sizeof tmp, "[HIGHLIGHT %.0fpx]  ", v->highlight_thickness);
+            snprintf(tmp, sizeof tmp, "[H #%02x%02x%02x %.0fpx]  ",
+                     v->highlight_r, v->highlight_g, v->highlight_b,
+                     v->highlight_thickness);
             strcat(right, tmp);
         }
     }
@@ -196,14 +198,11 @@ static void draw_bar_to(Viewer *v, Drawable dst)
         XftDrawStringUtf8(v->xftdraw, &v->c_fg.xft, v->font,
             rx, baseline, (const FcChar8*)right, strlen(right));
 
-    /* Cursor in search / color-input mode */
-    if (v->search_mode || v->color_input_mode) {
+    /* Cursor in search mode */
+    if (v->search_mode) {
         XGlyphInfo cext;
-        char cur[sizeof v->color_input_buf + 16];
-        if (v->color_input_mode)
-            snprintf(cur, sizeof cur, "Color: %s", v->color_input_buf);
-        else
-            snprintf(cur, sizeof cur, "/ %s", v->search_buf);
+        char cur[MAX_SEARCH + 4];
+        snprintf(cur, sizeof cur, "/ %s", v->search_buf);
         XftTextExtentsUtf8(v->dpy, v->font,
             (const FcChar8*)cur, strlen(cur), &cext);
         XSetForeground(v->dpy, v->gc, v->c_fg.pixel);

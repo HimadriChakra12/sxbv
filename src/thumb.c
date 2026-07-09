@@ -42,8 +42,9 @@ static void scan_dir(Viewer *v, const char *dir)
     if (!d) { fprintf(stderr, "sxbv: cannot open dir: %s\n", dir); return; }
 
     int cap = 64;
-    v->files      = malloc(cap * sizeof(ThumbEntry));
+    v->files      = malloc((size_t)cap * sizeof(ThumbEntry));
     v->file_count = 0;
+    if (!v->files) { closedir(d); return; }
 
     struct dirent *de;
     while ((de = readdir(d))) {
@@ -52,20 +53,29 @@ static void scan_dir(Viewer *v, const char *dir)
 
         if (v->file_count == cap) {
             cap *= 2;
-            v->files = realloc(v->files, cap * sizeof(ThumbEntry));
+            ThumbEntry *tmp = realloc(v->files, (size_t)cap * sizeof(ThumbEntry));
+            if (!tmp) break;   /* keep what we have so far */
+            v->files = tmp;
         }
 
         ThumbEntry *e = &v->files[v->file_count++];
         memset(e, 0, sizeof *e);
 
         size_t dlen = strlen(dir);
+        /* Strip trailing slash so we never produce "dir//file" */
+        while (dlen > 1 && dir[dlen-1] == '/') dlen--;
         size_t nlen = strlen(de->d_name);
         e->path = malloc(dlen + nlen + 2);
-        snprintf(e->path, dlen + nlen + 2, "%s/%s", dir, de->d_name);
+        if (!e->path) { v->file_count--; continue; }
+        memcpy(e->path, dir, dlen);
+        e->path[dlen] = '/';
+        memcpy(e->path + dlen + 1, de->d_name, nlen + 1);
         e->name = strdup(de->d_name);
+        if (!e->name) { free(e->path); e->path = NULL; v->file_count--; continue; }
     }
     closedir(d);
-    qsort(v->files, v->file_count, sizeof(ThumbEntry), cmp_entry);
+    if (v->file_count > 0)
+        qsort(v->files, (size_t)v->file_count, sizeof(ThumbEntry), cmp_entry);
 }
 
 /* ------------------------------------------------------------------ */
@@ -166,6 +176,8 @@ void thumb_init_dir(Viewer *v, const char *dir)
     v->thumb_sel    = 0;
     v->thumb_scroll = 0;
     v->thumb_next   = 0;
+    v->files        = NULL;     /* scan_dir will malloc this */
+    v->file_count   = 0;
 
     scan_dir(v, dir);
 
@@ -178,7 +190,8 @@ void thumb_init_dir(Viewer *v, const char *dir)
         }
     }
 
-    v->thumb_cols = v->win_w / (v->thumb_w + THUMB_PADDING);
+    int usable_w = v->win_w > 0 ? v->win_w : 800; /* safe fallback before first resize */
+    v->thumb_cols = usable_w / (v->thumb_w + THUMB_PADDING);
     if (v->thumb_cols < 1) v->thumb_cols = 1;
     thumb_scroll_to_sel(v);
 }
@@ -219,6 +232,8 @@ void thumb_draw(Viewer *v)
 {
     ensure_backbuf(v);
     Drawable dst = v->backbuf;
+
+    if (v->win_w <= 0 || v->win_h <= 0) return;
 
     v->thumb_cols = v->win_w / (v->thumb_w + THUMB_PADDING);
     if (v->thumb_cols < 1) v->thumb_cols = 1;
