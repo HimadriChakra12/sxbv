@@ -105,7 +105,15 @@ static void draw_bar_to(Viewer *v, Drawable dst)
                      v->show_fullpath ? path : name);
         }
     } else {
-        if (v->search_mode) {
+        if (v->text_input_mode) {
+            PageNotes *pn = (v->page >= 0 && v->page < v->annot_page_count)
+                            ? &v->page_notes[v->page] : NULL;
+            const char *cur_text = "";
+            if (pn) for (int i = 0; i < pn->count; i++)
+                if (pn->notes[i].id == v->text_note_id)
+                    { cur_text = pn->notes[i].text; break; }
+            snprintf(left, sizeof left, "Note: %s", cur_text);
+        } else if (v->search_mode) {
             snprintf(left, sizeof left, "/ %s", v->search_buf);
         } else if (v->hit_count > 0) {
             snprintf(left, sizeof left, "match %d/%d  %s",
@@ -176,6 +184,14 @@ static void draw_bar_to(Viewer *v, Drawable dst)
                      v->highlight_r, v->highlight_g, v->highlight_b,
                      v->highlight_thickness);
             strcat(right, tmp);
+        } else if (v->text_mode_armed) {
+            snprintf(tmp, sizeof tmp, "[T%s click to place]  ",
+                     v->text_mode_bg ? "+bg" : "");
+            strcat(right, tmp);
+        } else if (v->text_input_mode) {
+            strcat(right, "[typing note — Enter to finish]  ");
+        } else if (annot_has_selection(v)) {
+            strcat(right, "[selected — d=del  [/]=color  drag=move]  ");
         }
     }
 
@@ -339,7 +355,7 @@ void win_draw(Viewer *v)
     XCopyArea(v->dpy, dst, v->win, v->gc,
         0, 0, v->win_w, v->win_h, 0, 0);
 
-    annot_draw_cursor(v, v->win);
+    annot_draw_overlay(v, v->win);
 
     XFlush(v->dpy);
 }

@@ -60,11 +60,13 @@ typedef enum {
     CMD_SEARCH_START, CMD_SEARCH_NEXT, CMD_SEARCH_PREV,
 
     CMD_TOGGLE_HIGHLIGHT, CMD_TOGGLE_PENCIL,
+    CMD_TOGGLE_TEXT_BG,   CMD_TOGGLE_TEXT_NOBG,
     CMD_ANNOT_COLOR_PREV, CMD_ANNOT_COLOR_NEXT,
     CMD_ANNOT_THICK_DEC,  CMD_ANNOT_THICK_INC,
     CMD_ANNOT_UNDO,
     CMD_ANNOT_REDO,
     CMD_ANNOT_SAVE,
+    CMD_ANNOT_DELETE,     /* delete selected annotation */
 
     CMD_QUIT,
 } Command;
@@ -96,21 +98,43 @@ typedef enum {
     ANNOT_NONE,
     ANNOT_PENCIL,
     ANNOT_HIGHLIGHT,
+    ANNOT_TEXT,       /* text note (FreeText PDF annotation) */
 } AnnotMode;
+
+/* What a click in normal (non-drawing) mode hit */
+typedef enum {
+    SEL_NONE,
+    SEL_STROKE,       /* a pencil/highlight stroke group */
+    SEL_TEXT,         /* a text note */
+} SelType;
 
 /* One drawn segment. Endpoints and thickness are normalised to the
  * page pixmap's width/height *at the zoom level they were drawn*, so
- * strokes rescale correctly when the user zooms in or out afterwards.
- * (Rotation changes swap pixmap w/h; re-mapping annotations across a
- * rotation change is a known limitation left for a later pass.) */
+ * strokes rescale correctly when the user zooms in or out afterwards. */
 typedef struct {
     float nx0, ny0, nx1, ny1;  /* endpoints, 0..1 range            */
     float thickness;           /* fraction of page pixmap width    */
     unsigned char r, g, b;
-    unsigned char alpha;       /* 255 = opaque pencil, translucent for highlighter */
-    unsigned char multiply;    /* 1 = multiply-blend (highlighter), 0 = flat overwrite (pencil) */
-    unsigned char stroke_start; /* 1 = first segment of a new mousedown-to-mouseup stroke */
+    unsigned char alpha;
+    unsigned char multiply;    /* 1 = multiply-blend (highlighter) */
+    unsigned char stroke_start;
+    int   stroke_id;           /* unique id for selection grouping */
 } AnnotSeg;
+
+/* A text note annotation */
+typedef struct {
+    float nx, ny;              /* top-left corner, 0..1 page coords */
+    float nw, nh;              /* width/height, normalised           */
+    unsigned char r, g, b;    /* text color                         */
+    int   has_bg;              /* 1 = filled background box          */
+    char *text;                /* owned, UTF-8                       */
+    int   id;                  /* unique id for selection            */
+} TextNote;
+
+typedef struct {
+    TextNote *notes;
+    int       count, cap;
+} PageNotes;
 
 typedef struct {
     AnnotSeg *segs;
@@ -240,6 +264,23 @@ typedef struct {
     PageAnnots *page_annots;      /* one entry per page             */
     int         annot_page_count;
 
+    PageNotes  *page_notes;       /* text notes, one entry per page */
+
+    /* Selection: click on an existing annotation while no tool active */
+    SelType     sel_type;
+    int         sel_id;           /* stroke_id or note id           */
+    int         sel_dragging;
+    float       sel_drag_nx0, sel_drag_ny0; /* pointer at drag start */
+    float       sel_drag_ox,  sel_drag_oy;  /* annot origin at drag start */
+
+    /* Text-note input */
+    int         text_input_mode;  /* 1 = actively typing a note     */
+    int         text_note_id;     /* id of note being typed         */
+    char        text_input_buf[1024];
+
+    /* Unique annotation id counter */
+    int         next_annot_id;
+
     /* Redo stack: segments popped by undo are pushed here;
      * redo re-pushes them back onto page_annots. Cleared whenever a
      * new stroke segment is added (same semantics as every editor). */
@@ -264,6 +305,8 @@ typedef struct {
     int ptr_x, ptr_y;
 
     int bar_forced;
+    int text_mode_armed;  /* 1 = next click places a text note */
+    int text_mode_bg;     /* 1 = with background, 0 = transparent */
 } Viewer;
 
 /* ------------------------------------------------------------------ */
@@ -312,12 +355,28 @@ void annot_undo(Viewer *v);
 void annot_redo(Viewer *v);
 void annot_save(Viewer *v);
 
+/* Selection */
+void annot_try_select(Viewer *v, int wx, int wy);  /* click to select */
+void annot_sel_drag_start(Viewer *v, int wx, int wy);
+void annot_sel_drag(Viewer *v, int wx, int wy);
+void annot_sel_drag_end(Viewer *v);
+void annot_sel_delete(Viewer *v);
+void annot_sel_color_cycle(Viewer *v, int dir);
+void annot_sel_clear(Viewer *v);
+int  annot_has_selection(Viewer *v);
+
+/* Text notes */
+void annot_text_place(Viewer *v, int wx, int wy, int has_bg);
+void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len);
+void annot_text_commit(Viewer *v);
+void annot_text_cancel(Viewer *v);
+
 void annot_button(Viewer *v, XButtonEvent *be, int press);
 void annot_motion(Viewer *v, XMotionEvent *me);
 
 void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h);
 void annot_rebuild(Viewer *v);
 void annot_composite_last_segment(Viewer *v);
-void annot_draw_cursor(Viewer *v, Drawable dst);
+void annot_draw_overlay(Viewer *v, Drawable dst);  /* cursor ring + sel handles + text notes */
 
 #endif /* SXBV_H */

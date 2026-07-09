@@ -92,6 +92,7 @@ main.o: main.c src/sxbv.h src/pdfshim.h config.h
 
 sxbv: $(OBJS) $(POPLIB)
 	$(call link_bin)
+	strip $@
 
 -include $(DEPS) $(POPDEP)
 

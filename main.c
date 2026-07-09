@@ -348,15 +348,30 @@ static void run_command(Viewer *v, Command cmd, int cnt)
             if (v->hit_count > 0) v->hit = (v->hit - 1 + v->hit_count) % v->hit_count;
             else search_do(v, -1);
             break;
-        case CMD_TOGGLE_HIGHLIGHT: annot_toggle(v, ANNOT_HIGHLIGHT); break;
-        case CMD_TOGGLE_PENCIL:    annot_toggle(v, ANNOT_PENCIL);    break;
-        case CMD_ANNOT_COLOR_PREV: annot_color_cycle(v, -1); break;
-        case CMD_ANNOT_COLOR_NEXT: annot_color_cycle(v,  1); break;
-        case CMD_ANNOT_THICK_DEC:  annot_thickness_adjust(v, -ANNOT_THICK_STEP * cnt); break;
-        case CMD_ANNOT_THICK_INC:  annot_thickness_adjust(v,  ANNOT_THICK_STEP * cnt); break;
-        case CMD_ANNOT_UNDO: annot_undo(v); break;
-        case CMD_ANNOT_REDO: annot_redo(v); break;
-        case CMD_ANNOT_SAVE: annot_save(v); return; /* no redraw needed */
+        case CMD_TOGGLE_HIGHLIGHT:  annot_toggle(v, ANNOT_HIGHLIGHT); break;
+        case CMD_TOGGLE_PENCIL:     annot_toggle(v, ANNOT_PENCIL);    break;
+        case CMD_TOGGLE_TEXT_BG:
+            annot_sel_clear(v);
+            v->annot_mode     = ANNOT_NONE;
+            v->text_mode_armed = 1;
+            v->text_mode_bg    = 1;
+            if (!v->bar_visible) { v->bar_visible = 1; v->bar_forced = 1; }
+            break;
+        case CMD_TOGGLE_TEXT_NOBG:
+            annot_sel_clear(v);
+            v->annot_mode     = ANNOT_NONE;
+            v->text_mode_armed = 1;
+            v->text_mode_bg    = 0;
+            if (!v->bar_visible) { v->bar_visible = 1; v->bar_forced = 1; }
+            break;
+        case CMD_ANNOT_COLOR_PREV:  annot_color_cycle(v, -1); break;
+        case CMD_ANNOT_COLOR_NEXT:  annot_color_cycle(v,  1); break;
+        case CMD_ANNOT_THICK_DEC:   annot_thickness_adjust(v, -ANNOT_THICK_STEP * cnt); break;
+        case CMD_ANNOT_THICK_INC:   annot_thickness_adjust(v,  ANNOT_THICK_STEP * cnt); break;
+        case CMD_ANNOT_UNDO:        annot_undo(v); break;
+        case CMD_ANNOT_REDO:        annot_redo(v); break;
+        case CMD_ANNOT_SAVE:        annot_save(v); return;
+        case CMD_ANNOT_DELETE:      annot_sel_delete(v); break;
         case CMD_QUIT:
             exit(0);
         default:
@@ -372,15 +387,36 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
     buf[len]   = '\0';
     KeySym ks  = XLookupKeysym(ke, 0);
 
+    /* Text note input mode: eat all keys */
+    if (v->text_input_mode) {
+        annot_text_key(v, ks, buf, len);
+        win_draw(v);
+        return;
+    }
+
     if (v->search_mode) {
         handle_search_key(v, ks, buf, len);
         return;
     }
 
-    /* While a tool is active, number keys pick palette presets directly.
-     * Highlight: 1-5 (5 colors). Pencil: 1-9 plus 0 for slot 9 (10 colors).
-     * This intercepts before the normal numeric-prefix accumulation. */
-    if (annot_active(v) && !(ke->state & (ControlMask | ShiftMask))) {
+    /* Escape: deselect / exit annotation mode */
+    if (ks == XK_Escape) {
+        if (annot_has_selection(v)) {
+            annot_sel_clear(v);
+            win_draw(v);
+            return;
+        }
+        if (annot_active(v)) {
+            annot_toggle(v, v->annot_mode); /* toggles off */
+            win_draw(v);
+            return;
+        }
+        /* fall through to normal quit */
+    }
+
+    /* While a drawing tool is active, number keys pick palette presets */
+    if (annot_active(v) && v->annot_mode != ANNOT_TEXT &&
+        !(ke->state & (ControlMask | ShiftMask))) {
         if (v->annot_mode == ANNOT_HIGHLIGHT && ks >= XK_1 && ks <= XK_5) {
             annot_select_preset(v, (int)(ks - XK_1));
             win_draw(v);
@@ -396,7 +432,7 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
     }
 
     /* Accumulate numeric prefix (e.g. 5j = scroll 5 lines) */
-    if (ks >= XK_0 && ks <= XK_9 && !(ke->state & ControlMask)) {
+    if (ks >= XK_0 && ks <= XK_9 && !(ke->state & ControlMask) && !annot_active(v)) {
         v->num_buf   = v->num_valid ? v->num_buf * 10 + (ks - XK_0) : (ks - XK_0);
         v->num_valid = 1;
         return;
@@ -579,23 +615,33 @@ int main(int argc, char **argv)
                 handle_key(&v, &ev.xkey);
                 break;
             case ButtonPress:
-                handle_button(&v, &ev.xbutton);
-                if (annot_active(&v)) {
+                if (v.mode == MODE_NORMAL) {
+                    Command pending_text = CMD_NONE;
+                    /* Check if a text-note tool is "armed" — we use a
+                     * flag rather than a keybind dispatch because text
+                     * placement needs the click position. */
+                    if (v.text_mode_armed) {
+                        annot_text_place(&v, ev.xbutton.x, ev.xbutton.y,
+                                         v.text_mode_bg);
+                        v.text_mode_armed = 0;
+                        win_draw(&v);
+                        break;
+                    }
+                    handle_button(&v, &ev.xbutton);
                     annot_button(&v, &ev.xbutton, 1);
                     win_draw(&v);
+                } else {
+                    handle_button(&v, &ev.xbutton);
                 }
                 break;
             case ButtonRelease:
-                if (annot_active(&v))
+                if (v.mode == MODE_NORMAL) {
                     annot_button(&v, &ev.xbutton, 0);
+                    if (v.sel_dragging == 0 && annot_has_selection(&v))
+                        win_draw(&v);
+                }
                 break;
             case MotionNotify: {
-                /* Drain any additional queued motion events and act only
-                 * on the latest one -- a fast drag can otherwise queue up
-                 * many more motion events than we can usefully redraw for,
-                 * making input feel laggy. Segments still connect from the
-                 * last *processed* point to this one, so no gaps appear;
-                 * we just skip drawing every micro-step of a fast stroke. */
                 XEvent latest = ev;
                 while (XPending(v.dpy)) {
                     XEvent peek;
@@ -604,7 +650,8 @@ int main(int argc, char **argv)
                     XNextEvent(v.dpy, &latest);
                 }
                 annot_motion(&v, &latest.xmotion);
-                if (annot_active(&v) && v.mode != MODE_THUMB)
+                if (v.mode != MODE_THUMB &&
+                    (annot_active(&v) || v.sel_dragging || v.have_pointer))
                     win_draw(&v);
                 break;
             }

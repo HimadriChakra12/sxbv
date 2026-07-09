@@ -43,7 +43,7 @@ SRCS_CXX = src/pdfshim.cc
 OBJS     = $(SRCS_C:%.c=%.o) $(SRCS_CXX:%.cc=%.o)
 DEPS     = $(SRCS_C:%.c=%.d) $(SRCS_CXX:%.cc=%.d)
 
-SXBV_CFLAGS   := -std=c99  -D_POSIX_C_SOURCE=200809L  -Wall -Wextra  -O2  $(ARCH_FLAGS)  -fvisibility=hidden  $(COLOR)  -I. -Isrc  $(POPINC)  $(CODEC_CFLAGS)  -MMD -MP
+SXBV_CFLAGS   := -std=c99  -D_POSIX_C_SOURCE=200809L  -Wall -Wextra  -O2  $(ARCH_FLAGS)  -fvisibility=hidden  $(COLOR)  -I. -Isrc  $(POPINC)  $(CODEC_CFLAGS)  -MMD -MP -Os -pipe -s
 SXBV_CXXFLAGS := -std=c++23  -Wall -Wextra -O2 $(ARCH_FLAGS) $(FLT)  -fvisibility=hidden $(COLOR)  -I. -Isrc $(POPINC) $(CODECDEPS)  -MMD -MP
 POP_CFLAGS    := -std=c99  -O2  $(ARCH_FLAGS)  $(COLOR)  $(POPINC)  $(CODEC_CFLAGS)  -MMD -MP
 POP_CXXFLAGS  := -std=c++23  -O2  $(ARCH_FLAGS)  $(COLOR)  $(POPINC)  $(CODEC_CFLAGS)  -MMD -MP
