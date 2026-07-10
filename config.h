@@ -44,6 +44,12 @@ static const int show_fullscreen_indicator = 0;
 #define MAX_SEARCH        256
 #define WIN_SCREEN_FRAC   0.667f
 
+/* ---- Startup display mode ---- */
+/* 1 = start in continuous scroll mode, 0 = single-page (default) */
+static const int start_continuous = 0;
+/* 1 = start in two-page side-by-side mode, 0 = single-page (default) */
+static const int start_two_page   = 0;
+
 /* ---- Annotation tools: pencil (opaque) & highlighter (multiply) ---- */
 
 /* Highlighter palette: exactly 5 slots, select with 1-5 while in
@@ -88,6 +94,7 @@ static const char *pencil_palette[] = {
 #define HIGHLIGHT_ALPHA 255
 
 /* Outline color of the thickness-preview ring around the cursor. */
+#define PAGE_GAP        8    /* pixels between pages in continuous/two-page mode */
 #define ANNOT_CURSOR_RING_COLOR "#ffffff"
 
 #define KEYBINDINGS \
@@ -128,6 +135,9 @@ static const char *pencil_palette[] = {
     BIND(XK_p,         ShiftMask,   CMD_TOGGLE_FULLPATH)     \
     BIND(XK_q,         0,           CMD_QUIT)                \
     BIND(XK_Escape,    0,           CMD_QUIT)                \
+    BIND(XK_apostrophe, 0,          CMD_TOGGLE_CONTINUOUS)   \
+    BIND(XK_quotedbl,   0,          CMD_TOGGLE_TWO_PAGE)     \
+    BIND(XK_apostrophe, ShiftMask,  CMD_TOGGLE_TWO_PAGE)     \
     /* -- annotation tools -- */                             \
     BIND(XK_h,         ControlMask, CMD_TOGGLE_HIGHLIGHT)    \
     BIND(XK_p,         ControlMask, CMD_TOGGLE_PENCIL)       \

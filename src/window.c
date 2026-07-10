@@ -174,6 +174,9 @@ static void draw_bar_to(Viewer *v, Drawable dst)
         }
         if (v->show_fullscreen_indicator && v->fullscreen)
             strcat(right, "[FS]");
+        if (v->continuous && v->two_page) strcat(right, "[C2P]  ");
+        else if (v->continuous)           strcat(right, "[CONT]  ");
+        else if (v->two_page)             strcat(right, "[2P]  ");
         if (v->annot_mode == ANNOT_PENCIL) {
             snprintf(tmp, sizeof tmp, "[P #%02x%02x%02x %.0fpx]  ",
                      v->pencil_r, v->pencil_g, v->pencil_b,
@@ -244,6 +247,84 @@ void win_draw_bar_to(Viewer *v, Drawable dst)
 }
 
 /* ------------------------------------------------------------------ */
+/* Helpers for multi-page layout                                        */
+
+/* Render one page into a sub-region of dst at pixel offset (dx, dy).
+ * Returns the height of the rendered pixmap, or 0 on failure. */
+static int blit_page_at(Viewer *v, Drawable dst,
+                         int pg, int dx, int dy,
+                         int page_area_w, int page_area_h,
+                         int bar_off)
+{
+    if (pg < 0 || pg >= v->page_count) return 0;
+
+    /* Render the page if it's the current page (use cached annot_bgrx),
+     * otherwise render fresh without annotation cache. */
+    unsigned char *bgrx = NULL;
+    int pw = 0, ph = 0;
+    int free_bgrx = 0;
+
+    if (pg == v->page && v->annot_bgrx) {
+        bgrx   = v->annot_bgrx;
+        pw     = v->annot_bgrx_w;
+        ph     = v->annot_bgrx_h;
+    } else {
+        /* Render a fresh pixmap for this page at the current zoom */
+        PdfPix *tmp_pix = pdf_render(v->doc, pg, v->zoom, v->rotation);
+        if (!tmp_pix) return 0;
+        pw = pdf_pix_width(tmp_pix);
+        ph = pdf_pix_height(tmp_pix);
+
+        /* Convert to BGRX */
+        int stride = pdf_pix_stride(tmp_pix);
+        unsigned char *src = pdf_pix_samples(tmp_pix);
+        bgrx = malloc((size_t)pw * ph * 4);
+        if (bgrx) {
+            for (int y = 0; y < ph; y++) {
+                const unsigned char *row = src + (size_t)y * stride;
+                unsigned int *out = (unsigned int *)(bgrx + (size_t)y * pw * 4);
+                for (int x = 0; x < pw; x++) {
+                    unsigned int px;
+                    __builtin_memcpy(&px, row + x * 3, 4);
+                    unsigned int r = (px) & 0xffu;
+                    unsigned int g = (px >> 8) & 0xffu;
+                    unsigned int b = (px >> 16) & 0xffu;
+                    out[x] = (r << 16) | (g << 8) | b;
+                }
+            }
+        }
+        pdf_pix_free(tmp_pix);
+        free_bgrx = 1;
+    }
+
+    if (!bgrx) return ph;
+
+    XImage *img = XCreateImage(v->dpy, v->visual,
+        24, ZPixmap, 0, (char*)bgrx, (unsigned)pw, (unsigned)ph, 32, 0);
+    if (img) {
+        /* Center horizontally within page_area_w */
+        int cx = dx + (page_area_w - pw) / 2;
+        int cy = dy + bar_off;
+
+        /* Clip to window */
+        int sx = 0, sy = 0, dw = pw, dh = ph;
+        int pdx = cx, pdy = cy;
+        if (pdx < 0) { sx = -pdx; dw += pdx; pdx = 0; }
+        if (pdy < bar_off) { sy = bar_off - pdy; dh -= sy; pdy = bar_off; }
+        if (dw > v->win_w - pdx) dw = v->win_w - pdx;
+        int bot = bar_off + page_area_h;
+        if (pdy + dh > bot) dh = bot - pdy;
+        if (dw > 0 && dh > 0)
+            XPutImage(v->dpy, dst, v->gc, img, sx, sy, pdx, pdy, (unsigned)dw, (unsigned)dh);
+        img->data = NULL;
+        XDestroyImage(img);
+    }
+
+    if (free_bgrx) free(bgrx);
+    return ph;
+}
+
+/* ------------------------------------------------------------------ */
 /* Main draw                                                            */
 
 void win_draw(Viewer *v)
@@ -251,117 +332,145 @@ void win_draw(Viewer *v)
     ensure_backbuf(v);
     Drawable dst = v->backbuf;
 
-    int bar_off = 0;
-    int page_h  = v->win_h;
-    if (v->bar_visible) {
-        bar_off = topbar ? v->bar_h : 0;
-        page_h  = v->win_h - v->bar_h;
-    }
-    int page_y = topbar ? bar_off : 0;
+    int bar_off = v->bar_visible && topbar ? v->bar_h : 0;
+    int page_h  = v->win_h - (v->bar_visible ? v->bar_h : 0);
+    int page_y  = topbar ? bar_off : 0;
 
+    /* Fill background */
     XSetForeground(v->dpy, v->gc, v->c_pagebg.pixel);
     XFillRectangle(v->dpy, dst, v->gc, 0, page_y, v->win_w, page_h);
 
-    if (v->annot_bgrx) {
-        XImage *img = XCreateImage(v->dpy, v->visual,
-            24, ZPixmap, 0, (char*)v->annot_bgrx,
-            v->annot_bgrx_w, v->annot_bgrx_h, 32, 0);
-        if (img) {
-            int sx=0, sy=0;
-            int dx=v->scroll_x, dy=v->scroll_y + bar_off;
-            int dw=v->annot_bgrx_w, dh=v->annot_bgrx_h;
-            if (dx < 0) { sx = -dx; dw += dx; dx = 0; }
-            if (dy < page_y) { sy = page_y - dy; dh -= sy; dy = page_y; }
-            if (dw > v->win_w - dx) dw = v->win_w - dx;
-            int bot = page_y + page_h;
-            if (dy + dh > bot) dh = bot - dy;
-            if (dw > 0 && dh > 0)
-                XPutImage(v->dpy, dst, v->gc, img,
-                    sx, sy, dx, dy, dw, dh);
-            /* v->annot_bgrx is a persistent cache owned by annotate.c --
-             * do not free it here, only detach it from the XImage. */
-            img->data = NULL;
-            XDestroyImage(img);
-        }
+    if (v->mode == MODE_THUMB) {
+        /* Thumbnail mode: simple blit (thumb_draw fills backbuf directly) */
+        goto draw_bar_and_finish;
     }
 
-    /* Search hit rectangles
-     *
-     * hits[] are axis-aligned rects in PDF point space (72 dpi, y=0 at
-     * bottom-left of page).  We convert to pixel space, accounting for
-     * zoom and rotation, to match where displayPage() placed the content
-     * in the rendered bitmap.
-     *
-     * For each rotation, we derive pixel coords from the hit rect corners
-     * (x0,y0)-(x1,y1) in page-space, where page dims are pw × ph points.
-     */
-    if (v->hit_count > 0) {
-        int bar_off2 = v->bar_visible && topbar ? v->bar_h : 0;
-        PdfRect bounds = pdf_page_bounds(v->doc, v->page);
-        float pw = bounds.x1 - bounds.x0;
-        float ph = bounds.y1 - bounds.y0;
-        float z  = v->zoom;
-        int   r  = ((v->rotation % 360) + 360) % 360;
+    /* ---------------------------------------------------------------- */
+    if (v->continuous) {
+        /* Continuous scroll: stack all pages vertically.
+         * v->doc_scroll is the global Y offset (how far we've scrolled
+         * into the stacked-pages canvas). v->page tracks which page
+         * the viewport top is in. */
+        int col_w   = v->two_page ? v->win_w / 2 : v->win_w;
+        int y       = bar_off - v->doc_scroll;  /* where page 0 top would be */
 
-        for (int i = 0; i < v->hit_count; i++) {
-            PdfRect q = v->hits[i];
-            /* Normalise hit coords to page origin (handles non-zero MediaBox). */
-            float hx0 = q.x0 - bounds.x0;
-            float hy0 = q.y0 - bounds.y0;
-            float hx1 = q.x1 - bounds.x0;
-            float hy1 = q.y1 - bounds.y0;
+        /* Determine starting page based on scroll */
+        int start_pg = 0;
+        if (v->two_page) start_pg = (v->page / 2) * 2;
+        else             start_pg = v->page;
 
-            float px0, py0, px1, py1;
-            switch (r) {
-                default:
-                case 0:
-                    /* y-flip: PDF y=0 is bottom, screen y=0 is top */
-                    px0 = hx0 * z;
-                    py0 = (ph - hy1) * z;
-                    px1 = hx1 * z;
-                    py1 = (ph - hy0) * z;
-                    break;
-                case 90:
-                    px0 = hy0 * z;
-                    py0 = hx0 * z;
-                    px1 = hy1 * z;
-                    py1 = hx1 * z;
-                    break;
-                case 180:
-                    px0 = (pw - hx1) * z;
-                    py0 = hy0 * z;
-                    px1 = (pw - hx0) * z;
-                    py1 = hy1 * z;
-                    break;
-                case 270:
-                    px0 = (ph - hy1) * z;
-                    py0 = (pw - hx1) * z;
-                    px1 = (ph - hy0) * z;
-                    py1 = (pw - hx0) * z;
-                    break;
+        /* Walk back until we find a page that would be above the viewport */
+        for (int pg = start_pg; pg > 0; pg -= (v->two_page ? 2 : 1)) {
+            /* Estimate page height at current zoom */
+            PdfRect b = pdf_page_bounds(v->doc, pg - (v->two_page ? 2 : 1));
+            float ph_pt = b.y1 - b.y0;
+            int   ph_px = (int)(ph_pt * v->zoom) + PAGE_GAP;
+            y -= ph_px;
+        }
+
+        /* Render pages from top until we're below the viewport */
+        int pg = 0;
+        while (pg < v->page_count && y < bar_off + page_h) {
+            if (v->two_page) {
+                int pg2 = pg + 1;
+                int h1 = 0, h2 = 0;
+                h1 = blit_page_at(v, dst, pg,  0,      y - bar_off, col_w, page_h, bar_off);
+                if (pg2 < v->page_count)
+                    h2 = blit_page_at(v, dst, pg2, col_w, y - bar_off, col_w, page_h, bar_off);
+                int row_h = (h1 > h2 ? h1 : h2) + PAGE_GAP;
+                /* Update current page tracking */
+                if (y + bar_off + h1 > bar_off && y + bar_off < bar_off + page_h / 2) {
+                    v->page = pg;
+                }
+                y += row_h;
+                pg += 2;
+            } else {
+                int h = blit_page_at(v, dst, pg, 0, y - bar_off, v->win_w, page_h, bar_off);
+                if (y + bar_off + h > bar_off && y + bar_off < bar_off + page_h / 2) {
+                    v->page = pg;
+                }
+                y += h + PAGE_GAP;
+                pg++;
             }
-            XSetForeground(v->dpy, v->gc,
-                (i == v->hit) ? v->c_sel.pixel : v->c_mark.pixel);
-            XDrawRectangle(v->dpy, dst, v->gc,
-                (int)px0 + v->scroll_x,
-                (int)py0 + v->scroll_y + bar_off2,
-                (int)(px1 - px0), (int)(py1 - py0));
+        }
+
+    } else if (v->two_page) {
+        /* Two-page side by side, no continuous scroll */
+        int left_pg  = (v->page / 2) * 2;
+        int right_pg = left_pg + 1;
+        int col_w    = v->win_w / 2;
+
+        /* Center both pages vertically */
+        blit_page_at(v, dst, left_pg,  0,      0, col_w, page_h, bar_off);
+        if (right_pg < v->page_count)
+            blit_page_at(v, dst, right_pg, col_w, 0, col_w, page_h, bar_off);
+
+    } else {
+        /* Normal single-page mode */
+        if (v->annot_bgrx) {
+            XImage *img = XCreateImage(v->dpy, v->visual,
+                24, ZPixmap, 0, (char*)v->annot_bgrx,
+                (unsigned)v->annot_bgrx_w, (unsigned)v->annot_bgrx_h, 32, 0);
+            if (img) {
+                int sx=0, sy=0;
+                int dx=v->scroll_x, dy=v->scroll_y + bar_off;
+                int dw=v->annot_bgrx_w, dh=v->annot_bgrx_h;
+                if (dx < 0) { sx = -dx; dw += dx; dx = 0; }
+                if (dy < page_y) { sy = page_y - dy; dh -= sy; dy = page_y; }
+                if (dw > v->win_w - dx) dw = v->win_w - dx;
+                int bot = page_y + page_h;
+                if (dy + dh > bot) dh = bot - dy;
+                if (dw > 0 && dh > 0)
+                    XPutImage(v->dpy, dst, v->gc, img,
+                        sx, sy, dx, dy, (unsigned)dw, (unsigned)dh);
+                img->data = NULL;
+                XDestroyImage(img);
+            }
+        }
+
+        /* Search hit rectangles */
+        if (v->hit_count > 0) {
+            PdfRect bounds = pdf_page_bounds(v->doc, v->page);
+            float pw = bounds.x1 - bounds.x0;
+            float ph_p = bounds.y1 - bounds.y0;
+            float z = v->zoom;
+            int   r = ((v->rotation % 360) + 360) % 360;
+
+            for (int i = 0; i < v->hit_count; i++) {
+                PdfRect q = v->hits[i];
+                float hx0 = q.x0 - bounds.x0, hy0 = q.y0 - bounds.y0;
+                float hx1 = q.x1 - bounds.x0, hy1 = q.y1 - bounds.y0;
+                float px0, py0, px1, py1;
+                switch (r) {
+                    default:
+                    case 0:
+                        px0=(hx0)*z; py0=(ph_p-hy1)*z; px1=(hx1)*z; py1=(ph_p-hy0)*z; break;
+                    case 90:
+                        px0=hy0*z; py0=hx0*z; px1=hy1*z; py1=hx1*z; break;
+                    case 180:
+                        px0=(pw-hx1)*z; py0=hy0*z; px1=(pw-hx0)*z; py1=hy1*z; break;
+                    case 270:
+                        px0=(ph_p-hy1)*z; py0=(pw-hx1)*z; px1=(ph_p-hy0)*z; py1=(pw-hx0)*z; break;
+                }
+                XSetForeground(v->dpy, v->gc,
+                    (i == v->hit) ? v->c_sel.pixel : v->c_mark.pixel);
+                XDrawRectangle(v->dpy, dst, v->gc,
+                    (int)px0 + v->scroll_x, (int)py0 + v->scroll_y + bar_off,
+                    (unsigned)(px1 - px0), (unsigned)(py1 - py0));
+            }
         }
     }
 
+draw_bar_and_finish:
     if (v->bar_visible)
         draw_bar_to(v, dst);
 
-    /* Draw annotation overlay (text notes, selection handles, cursor ring)
-     * into the backbuffer BEFORE the copy so they're stable and don't
-     * flicker. The cursor ring still goes on the window after copy since
-     * it's ephemeral and tracks the pointer position. */
-    annot_draw_overlay(v, dst, 0); /* 0 = draw into backbuf (no cursor ring) */
+    annot_draw_overlay(v, dst, 0);
 
     XCopyArea(v->dpy, dst, v->win, v->gc,
         0, 0, v->win_w, v->win_h, 0, 0);
 
-    annot_draw_overlay(v, v->win, 1); /* 1 = draw cursor ring only, on window */
+    annot_draw_overlay(v, v->win, 1);
 
     XFlush(v->dpy);
 }

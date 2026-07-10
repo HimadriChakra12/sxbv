@@ -66,7 +66,10 @@ typedef enum {
     CMD_ANNOT_UNDO,
     CMD_ANNOT_REDO,
     CMD_ANNOT_SAVE,
-    CMD_ANNOT_DELETE,     /* delete selected annotation */
+    CMD_ANNOT_DELETE,
+
+    CMD_TOGGLE_CONTINUOUS,   /* ' = continuous scroll mode  */
+    CMD_TOGGLE_TWO_PAGE,     /* " = two-page side-by-side   */
 
     CMD_QUIT,
 } Command;
@@ -251,7 +254,10 @@ typedef struct {
     int show_fullscreen_indicator;
     int show_fullpath;
 
-    /* ---- annotation tools ---- */
+    /* display modes */
+    int  continuous;   /* 1 = all pages stacked vertically, scroll through them */
+    int  two_page;     /* 1 = show two pages side by side                       */
+    int  doc_scroll;   /* global Y scroll in continuous mode (pixels)           */
     AnnotMode annot_mode;
 
     float pencil_thickness;
