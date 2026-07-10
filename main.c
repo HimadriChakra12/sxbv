@@ -389,7 +389,7 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
 
     /* Text note input mode: eat all keys */
     if (v->text_input_mode) {
-        annot_text_key(v, ks, buf, len);
+        annot_text_key(v, ks, buf, len, ke->state);
         win_draw(v);
         return;
     }
@@ -399,19 +399,31 @@ static void handle_key(Viewer *v, XKeyEvent *ke)
         return;
     }
 
-    /* Escape: deselect / exit annotation mode */
+    /* Escape: cancel text mode / deselect / exit annotation mode */
     if (ks == XK_Escape) {
+        if (v->text_input_mode) {
+            annot_text_cancel(v);
+            win_draw(v);
+            return;
+        }
+        if (v->text_mode_armed) {
+            v->text_mode_armed = 0;
+            win_draw(v);
+            return;
+        }
         if (annot_has_selection(v)) {
             annot_sel_clear(v);
             win_draw(v);
             return;
         }
         if (annot_active(v)) {
-            annot_toggle(v, v->annot_mode); /* toggles off */
+            v->annot_mode    = ANNOT_NONE;
+            v->annot_drawing = 0;
+            if (v->bar_forced) { v->bar_forced = 0; }
             win_draw(v);
             return;
         }
-        /* fall through to normal quit */
+        /* fall through to normal CMD_QUIT */
     }
 
     /* While a drawing tool is active, number keys pick palette presets */

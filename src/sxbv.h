@@ -123,12 +123,13 @@ typedef struct {
 
 /* A text note annotation */
 typedef struct {
-    float nx, ny;              /* top-left corner, 0..1 page coords */
-    float nw, nh;              /* width/height, normalised           */
-    unsigned char r, g, b;    /* text color                         */
-    int   has_bg;              /* 1 = filled background box          */
-    char *text;                /* owned, UTF-8                       */
-    int   id;                  /* unique id for selection            */
+    float nx, ny;
+    float nw, nh;
+    unsigned char r, g, b;
+    int   has_bg;
+    int   font_size;     /* in points */
+    char *text;
+    int   id;
 } TextNote;
 
 typedef struct {
@@ -305,8 +306,9 @@ typedef struct {
     int ptr_x, ptr_y;
 
     int bar_forced;
-    int text_mode_armed;  /* 1 = next click places a text note */
-    int text_mode_bg;     /* 1 = with background, 0 = transparent */
+    int text_mode_armed;
+    int text_mode_bg;
+    int text_font_size;   /* font size for text notes in points, default 14 */
 } Viewer;
 
 /* ------------------------------------------------------------------ */
@@ -367,7 +369,7 @@ int  annot_has_selection(Viewer *v);
 
 /* Text notes */
 void annot_text_place(Viewer *v, int wx, int wy, int has_bg);
-void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len);
+void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len, unsigned int state);
 void annot_text_commit(Viewer *v);
 void annot_text_cancel(Viewer *v);
 
@@ -377,6 +379,6 @@ void annot_motion(Viewer *v, XMotionEvent *me);
 void annot_composite(Viewer *v, unsigned char *bgrx, int w, int h);
 void annot_rebuild(Viewer *v);
 void annot_composite_last_segment(Viewer *v);
-void annot_draw_overlay(Viewer *v, Drawable dst);  /* cursor ring + sel handles + text notes */
+void annot_draw_overlay(Viewer *v, Drawable dst, int cursor_only);
 
 #endif /* SXBV_H */

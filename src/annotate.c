@@ -100,6 +100,9 @@ void annot_config_defaults(Viewer *v)
     v->text_note_id    = -1;
     v->text_input_buf[0] = '\0';
 
+    v->text_mode_armed = 0;
+    v->text_mode_bg    = 0;
+    v->text_font_size  = 14;
     v->next_annot_id = 1;
 }
 
@@ -405,36 +408,36 @@ void annot_sel_drag(Viewer *v, int wx, int wy)
     if (!v->sel_dragging || v->page < 0 || v->page >= v->annot_page_count) return;
     float nx, ny;
     win_to_page_norm(v, wx, wy, &nx, &ny);
-    float ddx = nx - v->sel_drag_nx0;
-    float ddy = ny - v->sel_drag_ny0;
 
     if (v->sel_type == SEL_TEXT) {
+        /* Absolute: position = original + total delta from drag start */
+        float ddx = nx - v->sel_drag_nx0;
+        float ddy = ny - v->sel_drag_ny0;
         PageNotes *pn = &v->page_notes[v->page];
         for (int i = 0; i < pn->count; i++) {
             if (pn->notes[i].id == v->sel_id) {
                 pn->notes[i].nx = v->sel_drag_ox + ddx;
                 pn->notes[i].ny = v->sel_drag_oy + ddy;
-                /* clamp to page */
                 if (pn->notes[i].nx < 0.0f) pn->notes[i].nx = 0.0f;
                 if (pn->notes[i].ny < 0.0f) pn->notes[i].ny = 0.0f;
                 break;
             }
         }
     } else if (v->sel_type == SEL_STROKE) {
+        /* Incremental: move by the delta since the last motion event */
+        float dx = nx - v->sel_drag_nx0;
+        float dy = ny - v->sel_drag_ny0;
+        if (dx == 0.0f && dy == 0.0f) return;
         PageAnnots *pa = &v->page_annots[v->page];
         for (int i = 0; i < pa->count; i++) {
             if (pa->segs[i].stroke_id == v->sel_id) {
-                /* Compute original position from first drag position */
-                float ox0 = pa->segs[i].nx0 - ddx + (nx - v->sel_drag_nx0);
-                float oy0 = pa->segs[i].ny0 - ddy + (ny - v->sel_drag_ny0);
-                (void)ox0; (void)oy0;
-                pa->segs[i].nx0 += ddx - (nx - v->sel_drag_nx0);
-                pa->segs[i].ny0 += ddy - (ny - v->sel_drag_ny0);
-                pa->segs[i].nx1 += ddx - (nx - v->sel_drag_nx0);
-                pa->segs[i].ny1 += ddy - (ny - v->sel_drag_ny0);
+                pa->segs[i].nx0 += dx;
+                pa->segs[i].ny0 += dy;
+                pa->segs[i].nx1 += dx;
+                pa->segs[i].ny1 += dy;
             }
         }
-        /* Update drag origin to current pos (incremental delta) */
+        /* Advance the reference point so next event gives correct delta */
         v->sel_drag_nx0 = nx;
         v->sel_drag_ny0 = ny;
         annot_rebuild(v);
@@ -561,8 +564,9 @@ void annot_text_place(Viewer *v, int wx, int wy, int has_bg)
     t->nw     = 0.3f;   /* will grow with text */
     t->nh     = 0.05f;
     t->r      = 0; t->g = 0; t->b = 0;  /* default black */
-    t->has_bg = has_bg;
-    t->text   = strdup("");
+    t->has_bg    = has_bg;
+    t->font_size = v->text_font_size;
+    t->text      = strdup("");
     t->id     = v->next_annot_id++;
 
     v->annot_mode      = ANNOT_TEXT;
@@ -572,12 +576,44 @@ void annot_text_place(Viewer *v, int wx, int wy, int has_bg)
     if (!v->bar_visible) { v->bar_visible = 1; v->bar_forced = 1; }
 }
 
-void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len)
+void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len, unsigned int state)
 {
     if (!v->text_input_mode || v->page < 0 || v->page >= v->annot_page_count) return;
 
     if (ks == XK_Escape) { annot_text_cancel(v); return; }
-    if (ks == XK_Return || ks == XK_KP_Enter) { annot_text_commit(v); return; }
+
+    /* Ctrl+Enter commits */
+    if ((ks == XK_Return || ks == XK_KP_Enter) && (state & ControlMask)) {
+        annot_text_commit(v); return;
+    }
+    /* Shift+Return inserts newline */
+    if ((ks == XK_Return || ks == XK_KP_Enter) && (state & ShiftMask)) {
+        /* fall through to text insertion of '\n' */
+        buf = "\n"; len = 1;
+    } else if (ks == XK_Return || ks == XK_KP_Enter) {
+        annot_text_commit(v); return;
+    }
+
+    /* Ctrl + / - adjust font size of active note */
+    if (state & ControlMask) {
+        if (ks == XK_plus || ks == XK_equal) {
+            v->text_font_size++;
+            /* Also update the note being typed */
+            PageNotes *pn = &v->page_notes[v->page];
+            for (int i = 0; i < pn->count; i++)
+                if (pn->notes[i].id == v->text_note_id)
+                    { pn->notes[i].font_size = v->text_font_size; break; }
+            return;
+        }
+        if (ks == XK_minus) {
+            if (v->text_font_size > 6) v->text_font_size--;
+            PageNotes *pn = &v->page_notes[v->page];
+            for (int i = 0; i < pn->count; i++)
+                if (pn->notes[i].id == v->text_note_id)
+                    { pn->notes[i].font_size = v->text_font_size; break; }
+            return;
+        }
+    }
 
     PageNotes *pn = &v->page_notes[v->page];
     TextNote *t = NULL;
@@ -588,7 +624,6 @@ void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len)
     if (ks == XK_BackSpace) {
         size_t sl = strlen(t->text);
         if (sl > 0) {
-            /* UTF-8 aware backspace: strip last codepoint */
             unsigned char *s = (unsigned char*)t->text;
             int i = (int)sl - 1;
             while (i > 0 && (s[i] & 0xC0) == 0x80) i--;
@@ -597,11 +632,10 @@ void annot_text_key(Viewer *v, KeySym ks, const char *buf, int len)
         return;
     }
 
-    if (len > 0 && (unsigned char)buf[0] >= 0x20) {
-        size_t sl = strlen(t->text);
-        size_t ll = (size_t)len;
+    if (len > 0 && (buf[0] == '\n' || (unsigned char)buf[0] >= 0x20)) {
+        size_t sl = strlen(t->text), ll = (size_t)len;
         char *nt = realloc(t->text, sl + ll + 1);
-        if (nt) { t->text = nt; memcpy(t->text + sl, buf, ll); t->text[sl+ll] = '\0'; }
+        if (nt) { t->text = nt; memcpy(t->text+sl, buf, ll); t->text[sl+ll] = '\0'; }
     }
 }
 
@@ -878,27 +912,33 @@ void annot_composite_last_segment(Viewer *v)
 /* ------------------------------------------------------------------ */
 /* Overlay: cursor ring + selection handles + text notes               */
 
-void annot_draw_overlay(Viewer *v, Drawable dst)
+void annot_draw_overlay(Viewer *v, Drawable dst, int cursor_only)
 {
     if (v->mode == MODE_THUMB) return;
 
-    /* ---- thickness-preview cursor ring ---- */
-    if (annot_active(v) && v->annot_mode != ANNOT_TEXT && v->have_pointer) {
-        float thick_px = (v->annot_mode == ANNOT_PENCIL)
-                         ? v->pencil_thickness : v->highlight_thickness;
-        int radius = (int)(thick_px / 2.0f);
-        if (radius < 1) radius = 1;
-        XColor ring;
-        XParseColor(v->dpy, v->cmap, ANNOT_CURSOR_RING_COLOR, &ring);
-        XAllocColor(v->dpy, v->cmap, &ring);
-        XSetForeground(v->dpy, v->gc, ring.pixel);
-        XDrawArc(v->dpy, dst, v->gc,
-                 v->ptr_x-radius, v->ptr_y-radius,
-                 radius*2, radius*2, 0, 360*64);
-        XFillArc(v->dpy, dst, v->gc, v->ptr_x-1, v->ptr_y-1, 2, 2, 0, 360*64);
+    /* ---- cursor-only pass (drawn on window after XCopyArea) ---- */
+    if (cursor_only) {
+        if (annot_active(v) && v->annot_mode != ANNOT_TEXT && v->have_pointer) {
+            float thick_px = (v->annot_mode == ANNOT_PENCIL)
+                             ? v->pencil_thickness : v->highlight_thickness;
+            int radius = (int)(thick_px / 2.0f);
+            if (radius < 1) radius = 1;
+            XColor ring;
+            XParseColor(v->dpy, v->cmap, ANNOT_CURSOR_RING_COLOR, &ring);
+            XAllocColor(v->dpy, v->cmap, &ring);
+            XSetForeground(v->dpy, v->gc, ring.pixel);
+            XDrawArc(v->dpy, dst, v->gc,
+                     v->ptr_x-radius, v->ptr_y-radius,
+                     radius*2, radius*2, 0, 360*64);
+            XFillArc(v->dpy, dst, v->gc,
+                     v->ptr_x-1, v->ptr_y-1, 2, 2, 0, 360*64);
+        }
+        return;
     }
 
-    /* ---- selection outline ---- */
+    /* ---- full overlay pass (drawn into backbuffer before XCopyArea) ---- */
+
+    /* selection outline for strokes */
     if (v->sel_type == SEL_STROKE && v->page>=0 && v->page<v->annot_page_count) {
         XSetForeground(v->dpy, v->gc, WhitePixel(v->dpy, v->screen));
         XSetLineAttributes(v->dpy, v->gc, 1, LineOnOffDash, CapButt, JoinMiter);
@@ -913,60 +953,119 @@ void annot_draw_overlay(Viewer *v, Drawable dst)
         XSetLineAttributes(v->dpy, v->gc, 0, LineSolid, CapButt, JoinMiter);
     }
 
-    /* ---- text notes ---- */
+    /* text notes */
     if (v->page<0 || v->page>=v->annot_page_count) return;
     PageNotes *pn = &v->page_notes[v->page];
+    if (pn->count == 0) return;
+
+    /* We need an XftDraw targeting the backbuffer pixmap, not the window */
+    XftDraw *xftdst = XftDrawCreate(v->dpy, dst, v->visual, v->cmap);
+    if (!xftdst) return;
+
     for (int i=0; i<pn->count; i++) {
         TextNote *t = &pn->notes[i];
         int wx, wy;
         page_norm_to_win(v, t->nx, t->ny, &wx, &wy);
-        int pw = (int)(t->nw * (float)v->pix_w);
-        int ph = (int)(t->nh * (float)v->pix_h);
 
-        /* background */
+        /* Load font at this note's size */
+        char font_pattern[64];
+        snprintf(font_pattern, sizeof font_pattern,
+                 ":size=%d", t->font_size > 0 ? t->font_size : 14);
+        XftFont *nfont = XftFontOpenName(v->dpy, v->screen, font_pattern);
+        if (!nfont) nfont = v->font; /* fallback */
+
+        int line_h = nfont->ascent + nfont->descent + 2;
+
+        /* Measure all lines to compute box size */
+        const char *text   = t->text ? t->text : "";
+        int         max_w  = 80; /* minimum width */
+        int         nlines = 1;
+        const char *p = text;
+        const char *line_start = p;
+        while (*p) {
+            if (*p == '\n') {
+                XGlyphInfo ext;
+                XftTextExtentsUtf8(v->dpy, nfont,
+                    (const FcChar8*)line_start, (int)(p - line_start), &ext);
+                if ((int)ext.width > max_w) max_w = (int)ext.width;
+                nlines++;
+                line_start = p + 1;
+            }
+            p++;
+        }
+        /* Last line */
+        XGlyphInfo ext;
+        XftTextExtentsUtf8(v->dpy, nfont,
+            (const FcChar8*)line_start, (int)(p - line_start), &ext);
+        if ((int)ext.width > max_w) max_w = (int)ext.width;
+
+        /* Add cursor width for the typing note */
+        int is_typing = (v->text_input_mode && v->text_note_id == t->id);
+        if (is_typing) max_w += 8;
+
+        int box_w = max_w + 8;
+        int box_h = nlines * line_h + 6;
+
+        /* Update note's normalised size */
+        t->nw = (float)box_w / (float)(v->pix_w > 0 ? v->pix_w : 1);
+        t->nh = (float)box_h / (float)(v->pix_h > 0 ? v->pix_h : 1);
+
+        /* Background */
         if (t->has_bg) {
             XSetForeground(v->dpy, v->gc, WhitePixel(v->dpy, v->screen));
-            XFillRectangle(v->dpy, dst, v->gc, wx, wy, (unsigned)pw, (unsigned)ph);
+            XFillRectangle(v->dpy, dst, v->gc, wx, wy,
+                           (unsigned)box_w, (unsigned)box_h);
             XSetForeground(v->dpy, v->gc, BlackPixel(v->dpy, v->screen));
-            XDrawRectangle(v->dpy, dst, v->gc, wx, wy, (unsigned)pw, (unsigned)ph);
+            XDrawRectangle(v->dpy, dst, v->gc, wx, wy,
+                           (unsigned)box_w, (unsigned)box_h);
         }
 
-        /* Text in typing: show cursor */
-        const char *text = t->text;
-        int is_typing = (v->text_input_mode && v->text_note_id == t->id);
+        /* Allocate text color */
+        char spec[16];
+        snprintf(spec, sizeof spec, "#%02x%02x%02x", t->r, t->g, t->b);
+        XftColor xftc;
+        XftColorAllocName(v->dpy, v->visual, v->cmap, spec, &xftc);
 
-        if (v->font && text && text[0]) {
-            XColor tc;
-            char spec[16];
-            snprintf(spec, sizeof spec, "#%02x%02x%02x", t->r, t->g, t->b);
-            XftColor xftc;
-            XftColorAllocName(v->dpy, v->visual, v->cmap, spec, &xftc);
-            XftDrawChange(v->xftdraw, dst);
-            XftDrawStringUtf8(v->xftdraw, &xftc, v->font,
-                              wx+2, wy + v->font->ascent + 2,
-                              (const FcChar8*)text, (int)strlen(text));
-            XftColorFree(v->dpy, v->visual, v->cmap, &xftc);
-            XftDrawChange(v->xftdraw, v->win);
+        /* Render each line */
+        int cur_y = wy + nfont->ascent + 3;
+        p = text;
+        line_start = p;
+        while (1) {
+            int at_end = (*p == '\0');
+            if (*p == '\n' || at_end) {
+                int ll = (int)(p - line_start);
+                XftDrawStringUtf8(xftdst, &xftc, nfont,
+                                  wx + 4, cur_y,
+                                  (const FcChar8*)line_start, ll);
+                /* Cursor after last line if typing */
+                if (is_typing && at_end) {
+                    XGlyphInfo ce;
+                    XftTextExtentsUtf8(v->dpy, nfont,
+                        (const FcChar8*)line_start, ll, &ce);
+                    XSetForeground(v->dpy, v->gc, BlackPixel(v->dpy, v->screen));
+                    XFillRectangle(v->dpy, dst, v->gc,
+                                   wx + 4 + (int)ce.width, cur_y - nfont->ascent,
+                                   2, line_h);
+                }
+                cur_y += line_h;
+                line_start = p + 1;
+            }
+            if (at_end) break;
+            p++;
         }
 
-        if (is_typing) {
-            /* Cursor bar after the text */
-            XGlyphInfo ext;
-            XftTextExtentsUtf8(v->dpy, v->font,
-                               (const FcChar8*)(text ? text : ""),
-                               (int)strlen(text ? text : ""), &ext);
-            XSetForeground(v->dpy, v->gc, BlackPixel(v->dpy, v->screen));
-            XFillRectangle(v->dpy, dst, v->gc,
-                           wx+2+ext.width, wy+2, 1, v->font->height);
-        }
+        XftColorFree(v->dpy, v->visual, v->cmap, &xftc);
+        if (nfont != v->font) XftFontClose(v->dpy, nfont);
 
         /* Selection outline */
         if (v->sel_type == SEL_TEXT && v->sel_id == t->id) {
-            XSetForeground(v->dpy, v->gc, WhitePixel(v->dpy, v->screen));
+            XSetForeground(v->dpy, v->gc, BlackPixel(v->dpy, v->screen));
             XSetLineAttributes(v->dpy, v->gc, 2, LineOnOffDash, CapButt, JoinMiter);
             XDrawRectangle(v->dpy, dst, v->gc, wx-2, wy-2,
-                           (unsigned)(pw+4), (unsigned)(ph+4));
+                           (unsigned)(box_w+4), (unsigned)(box_h+4));
             XSetLineAttributes(v->dpy, v->gc, 0, LineSolid, CapButt, JoinMiter);
         }
     }
+
+    XftDrawDestroy(xftdst);
 }

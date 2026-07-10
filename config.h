@@ -131,7 +131,7 @@ static const char *pencil_palette[] = {
     /* -- annotation tools -- */                             \
     BIND(XK_h,         ControlMask, CMD_TOGGLE_HIGHLIGHT)    \
     BIND(XK_p,         ControlMask, CMD_TOGGLE_PENCIL)       \
-    BIND(XK_I,         ShiftMask,   CMD_TOGGLE_TEXT_BG)      \
+    BIND(XK_i,         ShiftMask,   CMD_TOGGLE_TEXT_BG)      \
     BIND(XK_i,         0,           CMD_TOGGLE_TEXT_NOBG)    \
     BIND(XK_bracketleft,  0,        CMD_ANNOT_COLOR_PREV)    \
     BIND(XK_bracketright, 0,        CMD_ANNOT_COLOR_NEXT)    \

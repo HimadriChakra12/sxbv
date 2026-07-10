@@ -352,10 +352,16 @@ void win_draw(Viewer *v)
     if (v->bar_visible)
         draw_bar_to(v, dst);
 
+    /* Draw annotation overlay (text notes, selection handles, cursor ring)
+     * into the backbuffer BEFORE the copy so they're stable and don't
+     * flicker. The cursor ring still goes on the window after copy since
+     * it's ephemeral and tracks the pointer position. */
+    annot_draw_overlay(v, dst, 0); /* 0 = draw into backbuf (no cursor ring) */
+
     XCopyArea(v->dpy, dst, v->win, v->gc,
         0, 0, v->win_w, v->win_h, 0, 0);
 
-    annot_draw_overlay(v, v->win);
+    annot_draw_overlay(v, v->win, 1); /* 1 = draw cursor ring only, on window */
 
     XFlush(v->dpy);
 }
