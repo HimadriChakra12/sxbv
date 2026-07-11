@@ -1,4 +1,4 @@
-# sxbv — fork with annotation tools
+# boi — a fully intact book viewer
 
 ## Packaging note
 `include/poppler-src/` was stripped out of this zip to keep it small.
