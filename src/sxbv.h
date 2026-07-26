@@ -69,7 +69,6 @@ typedef enum {
     CMD_ANNOT_DELETE,
 
     CMD_TOGGLE_CONTINUOUS,   /* ' = continuous scroll mode  */
-    CMD_TOGGLE_TWO_PAGE,     /* " = two-page side-by-side   */
 
     CMD_QUIT,
 } Command;
@@ -256,7 +255,6 @@ typedef struct {
 
     /* display modes */
     int  continuous;   /* 1 = all pages stacked vertically, scroll through them */
-    int  two_page;     /* 1 = show two pages side by side                       */
     int  doc_scroll;   /* global Y scroll in continuous mode (pixels)           */
     AnnotMode annot_mode;
 
@@ -302,6 +300,9 @@ typedef struct {
 
     int   annot_drawing;
     float annot_last_nx, annot_last_ny;
+    int   annot_shift_prev;         /* was Shift held on the previous motion event */
+    float annot_straight_anchor_nx, annot_straight_anchor_ny; /* fixed start of straight-line preview */
+    int   annot_straight_base_count;/* segment count to roll back to on each straight-line update */
 
     /* Per-page highlight coverage mask (never reset between strokes) */
     unsigned char *stroke_touched;

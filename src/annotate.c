@@ -765,10 +765,12 @@ void annot_button(Viewer *v, XButtonEvent *be, int press)
         v->annot_drawing  = 1;
         v->annot_last_nx  = nx;
         v->annot_last_ny  = ny;
+        v->annot_shift_prev = 0;
         push_seg(v, nx, ny, nx, ny);
         annot_composite_last_segment(v);
     } else {
         v->annot_drawing = 0;
+        v->annot_shift_prev = 0;
         v->stroke_pending_start = 1;
     }
 }
@@ -785,10 +787,33 @@ void annot_motion(Viewer *v, XMotionEvent *me)
     if (!annot_active(v) || !v->annot_drawing || v->mode == MODE_THUMB) return;
     float nx, ny;
     if (!win_to_page_norm(v, me->x, me->y, &nx, &ny)) return;
-    push_seg(v, v->annot_last_nx, v->annot_last_ny, nx, ny);
-    annot_composite_last_segment(v);
-    v->annot_last_nx = nx;
-    v->annot_last_ny = ny;
+
+    if (me->state & ShiftMask) {
+        /* Holding Shift constrains the stroke to a straight line from the
+         * point where Shift was first engaged to the current pointer
+         * position. Each motion event replaces the previous preview
+         * segment rather than appending another one. */
+        if (v->page < 0 || v->page >= v->annot_page_count) return;
+        PageAnnots *pa = &v->page_annots[v->page];
+        if (!v->annot_shift_prev) {
+            v->annot_straight_anchor_nx   = v->annot_last_nx;
+            v->annot_straight_anchor_ny   = v->annot_last_ny;
+            v->annot_straight_base_count  = pa->count;
+        } else if (pa->count > v->annot_straight_base_count) {
+            pa->count = v->annot_straight_base_count;
+        }
+        push_seg(v, v->annot_straight_anchor_nx, v->annot_straight_anchor_ny, nx, ny);
+        annot_rebuild(v);
+        v->annot_last_nx    = nx;
+        v->annot_last_ny    = ny;
+        v->annot_shift_prev = 1;
+    } else {
+        push_seg(v, v->annot_last_nx, v->annot_last_ny, nx, ny);
+        annot_composite_last_segment(v);
+        v->annot_last_nx    = nx;
+        v->annot_last_ny    = ny;
+        v->annot_shift_prev = 0;
+    }
 }
 
 /* ------------------------------------------------------------------ */

@@ -174,9 +174,7 @@ static void draw_bar_to(Viewer *v, Drawable dst)
         }
         if (v->show_fullscreen_indicator && v->fullscreen)
             strcat(right, "[FS]");
-        if (v->continuous && v->two_page) strcat(right, "[C2P]  ");
-        else if (v->continuous)           strcat(right, "[CONT]  ");
-        else if (v->two_page)             strcat(right, "[2P]  ");
+        if (v->continuous) strcat(right, "[CONT]  ");
         if (v->annot_mode == ANNOT_PENCIL) {
             snprintf(tmp, sizeof tmp, "[P #%02x%02x%02x %.0fpx]  ",
                      v->pencil_r, v->pencil_g, v->pencil_b,
@@ -351,18 +349,12 @@ void win_draw(Viewer *v)
          * v->doc_scroll is the global Y offset (how far we've scrolled
          * into the stacked-pages canvas). v->page tracks which page
          * the viewport top is in. */
-        int col_w   = v->two_page ? v->win_w / 2 : v->win_w;
-        int y       = bar_off - v->doc_scroll;  /* where page 0 top would be */
-
-        /* Determine starting page based on scroll */
-        int start_pg = 0;
-        if (v->two_page) start_pg = (v->page / 2) * 2;
-        else             start_pg = v->page;
+        int y = bar_off - v->doc_scroll;  /* where page 0 top would be */
 
         /* Walk back until we find a page that would be above the viewport */
-        for (int pg = start_pg; pg > 0; pg -= (v->two_page ? 2 : 1)) {
+        for (int pg = v->page; pg > 0; pg--) {
             /* Estimate page height at current zoom */
-            PdfRect b = pdf_page_bounds(v->doc, pg - (v->two_page ? 2 : 1));
+            PdfRect b = pdf_page_bounds(v->doc, pg - 1);
             float ph_pt = b.y1 - b.y0;
             int   ph_px = (int)(ph_pt * v->zoom) + PAGE_GAP;
             y -= ph_px;
@@ -371,39 +363,13 @@ void win_draw(Viewer *v)
         /* Render pages from top until we're below the viewport */
         int pg = 0;
         while (pg < v->page_count && y < bar_off + page_h) {
-            if (v->two_page) {
-                int pg2 = pg + 1;
-                int h1 = 0, h2 = 0;
-                h1 = blit_page_at(v, dst, pg,  0,      y - bar_off, col_w, page_h, bar_off);
-                if (pg2 < v->page_count)
-                    h2 = blit_page_at(v, dst, pg2, col_w, y - bar_off, col_w, page_h, bar_off);
-                int row_h = (h1 > h2 ? h1 : h2) + PAGE_GAP;
-                /* Update current page tracking */
-                if (y + bar_off + h1 > bar_off && y + bar_off < bar_off + page_h / 2) {
-                    v->page = pg;
-                }
-                y += row_h;
-                pg += 2;
-            } else {
-                int h = blit_page_at(v, dst, pg, 0, y - bar_off, v->win_w, page_h, bar_off);
-                if (y + bar_off + h > bar_off && y + bar_off < bar_off + page_h / 2) {
-                    v->page = pg;
-                }
-                y += h + PAGE_GAP;
-                pg++;
+            int h = blit_page_at(v, dst, pg, 0, y - bar_off, v->win_w, page_h, bar_off);
+            if (y + bar_off + h > bar_off && y + bar_off < bar_off + page_h / 2) {
+                v->page = pg;
             }
+            y += h + PAGE_GAP;
+            pg++;
         }
-
-    } else if (v->two_page) {
-        /* Two-page side by side, no continuous scroll */
-        int left_pg  = (v->page / 2) * 2;
-        int right_pg = left_pg + 1;
-        int col_w    = v->win_w / 2;
-
-        /* Center both pages vertically */
-        blit_page_at(v, dst, left_pg,  0,      0, col_w, page_h, bar_off);
-        if (right_pg < v->page_count)
-            blit_page_at(v, dst, right_pg, col_w, 0, col_w, page_h, bar_off);
 
     } else {
         /* Normal single-page mode */

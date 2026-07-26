@@ -65,17 +65,10 @@ void clamp_scroll(Viewer *v)
         if (v->doc_scroll < 0) v->doc_scroll = 0;
         /* Estimate total document height */
         int total_h = 0;
-        for (int pg = 0; pg < v->page_count; pg += (v->two_page ? 2 : 1)) {
+        for (int pg = 0; pg < v->page_count; pg++) {
             PdfRect b = pdf_page_bounds(v->doc, pg);
             float ph = b.y1 - b.y0;
-            int row_h = (int)(ph * v->zoom) + PAGE_GAP;
-            if (v->two_page && pg + 1 < v->page_count) {
-                PdfRect b2 = pdf_page_bounds(v->doc, pg + 1);
-                float ph2 = b2.y1 - b2.y0;
-                int h2 = (int)(ph2 * v->zoom) + PAGE_GAP;
-                if (h2 > row_h) row_h = h2;
-            }
-            total_h += row_h;
+            total_h += (int)(ph * v->zoom) + PAGE_GAP;
         }
         int page_area = v->win_h - (v->bar_visible ? v->bar_h : 0);
         int max_scroll = total_h - page_area;
@@ -90,24 +83,6 @@ void clamp_scroll(Viewer *v)
             if (v->scroll_x < v->win_w - v->pix_w)
                 v->scroll_x = v->win_w - v->pix_w;
         }
-        return;
-    }
-
-    if (v->two_page) {
-        /* Two-page: each column is half the window; pages are centered
-         * in their column. No horizontal scroll needed (columns fill window). */
-        v->scroll_x = 0;
-        int page_area = v->win_h - (v->bar_visible ? v->bar_h : 0);
-        int col_w = v->win_w / 2;
-        if (v->pix_h <= page_area)
-            v->scroll_y = (page_area - v->pix_h) / 2;
-        else {
-            if (v->scroll_y > 0) v->scroll_y = 0;
-            if (v->scroll_y < page_area - v->pix_h)
-                v->scroll_y = page_area - v->pix_h;
-        }
-        if (v->pix_w <= col_w)
-            v->scroll_x = (col_w - v->pix_w) / 2;
         return;
     }
 
@@ -132,21 +107,14 @@ void go_page(Viewer *v, int p)
 {
     if (p < 0) p = 0;
     if (p >= v->page_count) p = v->page_count - 1;
-    if (v->two_page) p = (p / 2) * 2;  /* snap to even page in two-page mode */
 
     if (v->continuous) {
         /* Compute doc_scroll offset so the target page is at the viewport top */
         int y = 0;
-        for (int pg = 0; pg < p; pg += (v->two_page ? 2 : 1)) {
+        for (int pg = 0; pg < p; pg++) {
             PdfRect b = pdf_page_bounds(v->doc, pg);
             float ph = b.y1 - b.y0;
-            int row_h = (int)(ph * v->zoom) + PAGE_GAP;
-            if (v->two_page && pg + 1 < v->page_count) {
-                PdfRect b2 = pdf_page_bounds(v->doc, pg + 1);
-                int h2 = (int)((b2.y1 - b2.y0) * v->zoom) + PAGE_GAP;
-                if (h2 > row_h) row_h = h2;
-            }
-            y += row_h;
+            y += (int)(ph * v->zoom) + PAGE_GAP;
         }
         v->doc_scroll = y;
         v->page = p;
@@ -382,7 +350,7 @@ static void run_command(Viewer *v, Command cmd, int cnt)
             } else if (v->pix_h > v->win_h) {
                 v->scroll_y -= sl * cnt; clamp_scroll(v);
             } else {
-                go_page(v, v->page + (v->two_page ? 2 : 1) * cnt);
+                go_page(v, v->page + cnt);
             }
             break;
         case CMD_SCROLL_UP:
@@ -392,7 +360,7 @@ static void run_command(Viewer *v, Command cmd, int cnt)
             } else if (v->pix_h > v->win_h) {
                 v->scroll_y += sl * cnt; clamp_scroll(v);
             } else {
-                go_page(v, v->page - (v->two_page ? 2 : 1) * cnt);
+                go_page(v, v->page - cnt);
             }
             break;
         case CMD_SCROLL_LEFT:
@@ -406,9 +374,9 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 int prev = v->scroll_y;
                 v->scroll_y -= sp; clamp_scroll(v);
                 if (v->scroll_y == prev)
-                    go_page(v, v->page + (v->two_page ? 2 : 1));
+                    go_page(v, v->page + 1);
             } else {
-                go_page(v, v->page + (v->two_page ? 2 : 1) * cnt);
+                go_page(v, v->page + cnt);
             }
             break;
         case CMD_SCREEN_UP:
@@ -418,15 +386,15 @@ static void run_command(Viewer *v, Command cmd, int cnt)
                 int prev = v->scroll_y;
                 v->scroll_y += sp; clamp_scroll(v);
                 if (v->scroll_y == prev)
-                    go_page(v, v->page - (v->two_page ? 2 : 1));
+                    go_page(v, v->page - 1);
             } else {
-                go_page(v, v->page - (v->two_page ? 2 : 1) * cnt);
+                go_page(v, v->page - cnt);
             }
             break;
         case CMD_NEXT_PAGE:
-            go_page(v, v->page + (v->two_page ? 2 : 1) * cnt); break;
+            go_page(v, v->page + cnt); break;
         case CMD_PREV_PAGE:
-            go_page(v, v->page - (v->two_page ? 2 : 1) * cnt); break;
+            go_page(v, v->page - cnt); break;
         case CMD_FIRST_PAGE: go_page(v, cnt > 1 ? cnt - 1 : 0); break;
         case CMD_LAST_PAGE:  go_page(v, cnt > 1 ? cnt - 1 : v->page_count - 1); break;
         case CMD_ZOOM_IN:    zoom_by(v,  ZOOM_STEP * cnt); break;
@@ -474,10 +442,6 @@ static void run_command(Viewer *v, Command cmd, int cnt)
         case CMD_TOGGLE_CONTINUOUS:
             v->continuous = !v->continuous;
             if (v->continuous) v->doc_scroll = 0;
-            render_page(v);
-            break;
-        case CMD_TOGGLE_TWO_PAGE:
-            v->two_page = !v->two_page;
             render_page(v);
             break;
         case CMD_QUIT:
@@ -684,7 +648,6 @@ int main(int argc, char **argv)
     if (!is_dir) annot_init(&v);
     v.bar_visible = (is_dir) ? showbar_thumb : showbar_normal;
     v.continuous  = start_continuous;
-    v.two_page    = start_two_page;
 
     if (is_dir) {
         v.mode = MODE_THUMB;

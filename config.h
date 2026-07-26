@@ -38,8 +38,8 @@ static const int show_fullscreen_indicator = 0;
 #define ZOOM_STEP         0.1f
 #define ZOOM_MIN          0.05f
 #define ZOOM_MAX          16.0f
-#define SCROLL_LINE       50
-#define SCROLL_PAGE_FRAC  0.9f
+#define SCROLL_LINE       70
+#define SCROLL_PAGE_FRAC  0.92f
 #define MAX_HITS          512
 #define MAX_SEARCH        256
 #define WIN_SCREEN_FRAC   0.667f
@@ -47,8 +47,6 @@ static const int show_fullscreen_indicator = 0;
 /* ---- Startup display mode ---- */
 /* 1 = start in continuous scroll mode, 0 = single-page (default) */
 static const int start_continuous = 0;
-/* 1 = start in two-page side-by-side mode, 0 = single-page (default) */
-static const int start_two_page   = 0;
 
 /* ---- Annotation tools: pencil (opaque) & highlighter (multiply) ---- */
 
@@ -136,8 +134,6 @@ static const char *pencil_palette[] = {
     BIND(XK_q,         0,           CMD_QUIT)                \
     BIND(XK_Escape,    0,           CMD_QUIT)                \
     BIND(XK_apostrophe, 0,          CMD_TOGGLE_CONTINUOUS)   \
-    BIND(XK_quotedbl,   0,          CMD_TOGGLE_TWO_PAGE)     \
-    BIND(XK_apostrophe, ShiftMask,  CMD_TOGGLE_TWO_PAGE)     \
     /* -- annotation tools -- */                             \
     BIND(XK_h,         ControlMask, CMD_TOGGLE_HIGHLIGHT)    \
     BIND(XK_p,         ControlMask, CMD_TOGGLE_PENCIL)       \
