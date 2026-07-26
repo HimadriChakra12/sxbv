@@ -2,7 +2,37 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 #include "sxbv.h"
+
+/* ------------------------------------------------------------------ */
+/* Diagnostic timing: set SXBV_DEBUG_GEOM=1 in the environment to log
+ * every geometry-related event (with a millisecond timestamp relative
+ * to startup) to stderr. Used to track down the "page settles into
+ * place ~1s after opening" report - run:
+ *   SXBV_DEBUG_GEOM=1 ./sxbv file.pdf 2>geom.log
+ * and share geom.log. This logging is inert unless the env var is set. */
+static int dbg_geom_enabled(void)
+{
+    static int checked = 0, val = 0;
+    if (!checked) { val = (getenv("SXBV_DEBUG_GEOM") != NULL); checked = 1; }
+    return val;
+}
+static double dbg_ms_since_start(void)
+{
+    static struct timespec t0;
+    static int have_t0 = 0;
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    if (!have_t0) { t0 = t; have_t0 = 1; }
+    return (t.tv_sec - t0.tv_sec) * 1000.0 + (t.tv_nsec - t0.tv_nsec) / 1e6;
+}
+#define DBG_GEOM(...) do { \
+    if (dbg_geom_enabled()) { \
+        fprintf(stderr, "[%8.2fms] ", dbg_ms_since_start()); \
+        fprintf(stderr, __VA_ARGS__); \
+    } \
+} while (0)
 
 /* ------------------------------------------------------------------ */
 static const char *expand_path(const char *path)
@@ -644,6 +674,7 @@ int main(int argc, char **argv)
     v.show_fullpath             = show_fullpath;
 
     if (!win_init(&v)) return 1;   /* only once */
+    DBG_GEOM("win_init done: win_w=%d win_h=%d\n", v.win_w, v.win_h);
     annot_config_defaults(&v);
     if (!is_dir) annot_init(&v);
     v.bar_visible = (is_dir) ? showbar_thumb : showbar_normal;
@@ -674,8 +705,32 @@ int main(int argc, char **argv)
         if (opt_fs || startfullscreen)
             win_toggle_fullscreen(&v);
         v.mode = MODE_NORMAL;
+
+        /* win_init() already waits for MapNotify, but many WMs (tiling
+         * layouts, decorations applied post-map, etc.) follow up with
+         * one or more ConfigureNotify events carrying the *real* final
+         * geometry a moment later. If we render before those arrive,
+         * the page appears in the wrong spot and then visibly snaps
+         * into place once the resize is processed. Drain anything
+         * already queued (or about to be, per XSync) so the first
+         * render uses settled geometry instead of a guess. */
+        XSync(v.dpy, False);
+        XEvent ev_settle;
+        DBG_GEOM("settle: pre-drain win_w=%d win_h=%d\n", v.win_w, v.win_h);
+        while (XPending(v.dpy)) {
+            XPeekEvent(v.dpy, &ev_settle);
+            if (ev_settle.type != ConfigureNotify) break;
+            XNextEvent(v.dpy, &ev_settle);
+            v.win_w = ev_settle.xconfigure.width;
+            v.win_h = ev_settle.xconfigure.height;
+            DBG_GEOM("settle: drained ConfigureNotify -> %dx%d\n", v.win_w, v.win_h);
+        }
+        DBG_GEOM("settle: post-drain win_w=%d win_h=%d, rendering first frame\n", v.win_w, v.win_h);
+
         render_page(&v);
         win_draw(&v);
+        DBG_GEOM("initial render_page+win_draw done, zoom=%.3f scroll=(%d,%d)\n",
+                 v.zoom, v.scroll_x, v.scroll_y);
     }
 
     /* Event loop */
@@ -691,6 +746,7 @@ int main(int argc, char **argv)
         XNextEvent(v.dpy, &ev);
         switch (ev.type) {
             case Expose:
+                DBG_GEOM("Expose count=%d win=%dx%d\n", ev.xexpose.count, v.win_w, v.win_h);
                 if (ev.xexpose.count == 0) {
                     if (v.mode == MODE_THUMB) thumb_draw(&v);
                     else win_draw(&v);
@@ -742,11 +798,34 @@ int main(int argc, char **argv)
             }
             case ConfigureNotify: {
                                       XConfigureEvent *ce = &ev.xconfigure;
+                                      DBG_GEOM("ConfigureNotify raw %dx%d (prev win=%dx%d)\n",
+                                               ce->width, ce->height, v.win_w, v.win_h);
+                                      /* A resize/placement can arrive as a burst of several
+                                       * ConfigureNotify events in quick succession (WM
+                                       * decorations, tiling reflow, etc). Re-rendering the
+                                       * page for each intermediate one is wasted work and is
+                                       * exactly what makes the page look like it "snaps" into
+                                       * place late - only the final size in the queue matters. */
+                                      while (XPending(v.dpy)) {
+                                          XEvent peek;
+                                          XPeekEvent(v.dpy, &peek);
+                                          if (peek.type != ConfigureNotify) break;
+                                          XNextEvent(v.dpy, &ev);
+                                          ce = &ev.xconfigure;
+                                          DBG_GEOM("ConfigureNotify coalesced -> %dx%d\n",
+                                                   ce->width, ce->height);
+                                      }
                                       if (ce->width != v.win_w || ce->height != v.win_h) {
                                           v.win_w = ce->width;
                                           v.win_h = ce->height;
+                                          DBG_GEOM("ConfigureNotify applied, re-rendering at %dx%d\n",
+                                                   v.win_w, v.win_h);
                                           if (v.mode == MODE_THUMB) thumb_draw(&v);
                                           else { render_page(&v); win_draw(&v); }
+                                          DBG_GEOM("re-render done, zoom=%.3f scroll=(%d,%d)\n",
+                                                   v.zoom, v.scroll_x, v.scroll_y);
+                                      } else {
+                                          DBG_GEOM("ConfigureNotify was a no-op (size unchanged)\n");
                                       }
                                       break;
                                   }

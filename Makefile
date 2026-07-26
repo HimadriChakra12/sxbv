@@ -92,7 +92,6 @@ main.o: main.c src/sxbv.h src/pdfshim.h config.h
 
 sxbv: $(OBJS) $(POPLIB)
 	$(call link_bin)
-	strip $@
 
 -include $(DEPS) $(POPDEP)
 
@@ -118,6 +117,7 @@ distclean: clean
 	@printf "$(GREEN)DISTCLEANED$(RESET)\n"
 
 install: sxbv
+	strip sxbv
 	install -Dm755 sxbv $(DESTDIR)$(BINDIR)/sxbv
 	install -Dm644 sxbv.desktop $(DESTDIR)$(PREFIX)/share/applications/sxbv.desktop
 
