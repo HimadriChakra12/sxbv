@@ -104,8 +104,8 @@ static const char *pencil_palette[] = {
     BIND(XK_Page_Down, 0,           CMD_NEXT_PAGE)           \
     BIND(XK_h,         0,           CMD_PREV_PAGE)           \
     BIND(XK_Page_Up,   0,           CMD_PREV_PAGE)           \
-    BIND(XK_space,     0,           CMD_SCREEN_DOWN)         \
-    BIND(XK_BackSpace, 0,           CMD_SCREEN_UP)           \
+    BIND(XK_space,     0,           CMD_NEXT_PAGE)           \
+    BIND(XK_BackSpace, 0,           CMD_PREV_PAGE)           \
     BIND(XK_Left,      0,           CMD_SCROLL_LEFT)         \
     BIND(XK_Right,     0,           CMD_SCROLL_RIGHT)        \
     BIND(XK_g,         0,           CMD_FIRST_PAGE)          \
